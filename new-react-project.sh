@@ -2,10 +2,11 @@
 
 set -euo pipefail
 
-# new-react-project.sh
-# Scaffolds a new Next.js project with TypeScript, Tailwind, shadcn/ui, Zustand, TanStack Query, Auth.js, and full tooling.
+# new-react-project.sh v2.0.0
+# Scaffolds a production-ready Next.js 15 project with feature-based architecture.
+# Generates: Next.js + TypeScript + Tailwind + shadcn/ui + Zustand + TanStack Query + Auth.js
 
-readonly SCRIPT_VERSION="1.0.0"
+readonly SCRIPT_VERSION="2.0.0"
 readonly SCRIPT_AUTHOR="Rich Taft"
 
 # Color codes for output
@@ -62,8 +63,12 @@ USAGE:
   new-react-project.sh --name <project-name> [OPTIONS]
 
 DESCRIPTION:
-  Scaffolds a new Next.js 15 project with TypeScript, Tailwind CSS, shadcn/ui,
-  Zustand, TanStack Query, Auth.js, Vitest, ESLint, Prettier, Docker, and GitHub Actions CI.
+  Scaffolds a production-ready Next.js 15 project with:
+  - Feature-based architecture (features/ directory for scaling)
+  - Organized lib/ with api/, auth/, constants/, hooks/, providers/, store/, types/
+  - Separated components/layout/ and components/common/ (besides shadcn/ui)
+  - Professional test structure: fixtures/, unit/, integration/
+  - TypeScript, Tailwind CSS, shadcn/ui, Zustand, TanStack Query, Auth.js, Vitest
 
 OPTIONS:
   --name <name>       Project name (required; or use positional argument)
@@ -78,8 +83,8 @@ OPTIONS:
 
 EXAMPLES:
   new-react-project.sh --name my-app
-  new-react-project.sh --name my-app --dir ~/projects --no-auth
-  new-react-project.sh my-app --no-docker
+  new-react-project.sh my-app --no-auth
+  new-react-project.sh --name enterprise-app --dir ~/projects
 
 EOF
 }
@@ -129,7 +134,6 @@ parse_args() {
         exit 1
         ;;
       *)
-        # Positional argument: project name
         if [[ -z "$project_name" ]]; then
           project_name="$1"
         else
@@ -149,7 +153,6 @@ validate_project_name() {
     exit 1
   fi
 
-  # Validate: alphanumeric + hyphens + underscores, no leading digit
   if ! [[ "$project_name" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]]; then
     print_error "Project name must start with a letter or underscore, and contain only alphanumeric characters, hyphens, and underscores"
     exit 1
@@ -171,7 +174,6 @@ check_dependencies() {
     exit 1
   fi
 
-  # Check optional tools
   if ! command -v gh &>/dev/null; then
     print_warning "GitHub CLI (gh) not found. You can still create the repo manually."
   fi
@@ -216,8 +218,6 @@ create_next_app() {
     --no-src-dir \
     --import-alias "@/*" \
     --no-git \
-    --no-git-init \
-    --skip-install \
     --use-npm \
     --yes \
     --cwd "$project_dir"
@@ -228,16 +228,13 @@ install_dependencies() {
   print_info "Installing dependencies..."
   local full_path="$project_dir/$project_name"
 
-  # Core dependencies
   local deps=(
     "zustand"
     "@tanstack/react-query@5"
     "@tanstack/react-query-devtools@5"
     "next-auth@beta"
-    "react-icons"
   )
 
-  # Development dependencies
   local dev_deps=(
     "vitest"
     "@vitest/coverage-v8"
@@ -251,6 +248,7 @@ install_dependencies() {
     "lint-staged"
     "prettier"
     "prettier-plugin-tailwindcss"
+    "eslint-config-prettier"
   )
 
   run_cmd npm install --prefix "$full_path" "${deps[@]}"
@@ -263,7 +261,7 @@ install_dependencies() {
 init_shadcn() {
   print_info "Initializing shadcn/ui..."
   local full_path="$project_dir/$project_name"
-  run_cmd npx shadcn-ui@latest init --cwd "$full_path" --yes
+  run_cmd npx shadcn@latest init --cwd "$full_path" --yes
   print_success "shadcn/ui initialized"
 }
 
@@ -272,7 +270,6 @@ patch_next_config() {
   local full_path="$project_dir/$project_name"
   local next_config_file="$full_path/next.config.ts"
 
-  # Overwrite next.config.ts with standalone output + typed config
   cat >"$next_config_file" <<'NEXT_CONFIG'
 import type { NextConfig } from 'next'
 
@@ -280,7 +277,7 @@ const nextConfig: NextConfig = {
   output: 'standalone',
   reactStrictMode: true,
   eslint: {
-    dirs: ['app', 'components', 'lib', 'tests'],
+    dirs: ['app', 'components', 'features', 'lib', 'tests'],
   },
 }
 
@@ -291,39 +288,184 @@ NEXT_CONFIG
 }
 
 create_lib_files() {
-  print_info "Creating library files..."
+  print_info "Creating lib/ structure..."
   local full_path="$project_dir/$project_name"
 
-  # lib/utils.ts (cn helper from shadcn)
-  cat >"$full_path/lib/utils.ts" <<'LIB_UTILS'
-import { clsx, type ClassValue } from 'clsx'
-import { twMerge } from 'tailwind-merge'
-
-export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs))
+  # lib/api/client.ts
+  mkdir -p "$full_path/lib/api"
+  cat >"$full_path/lib/api/client.ts" <<'LIB_API_CLIENT'
+export interface RequestOptions extends RequestInit {
+  params?: Record<string, string>
 }
-LIB_UTILS
 
-  # lib/query.tsx (TanStack Query provider)
-  cat >"$full_path/lib/query.tsx" <<'LIB_QUERY'
+export class ApiClientError extends Error {
+  constructor(
+    public readonly statusCode: number,
+    message: string,
+    public readonly code?: string
+  ) {
+    super(message)
+    this.name = 'ApiClientError'
+  }
+}
+
+async function request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
+  const { params, ...init } = options
+  const url = new URL(endpoint, process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3000')
+  if (params) {
+    Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value))
+  }
+
+  const res = await fetch(url.toString(), {
+    headers: { 'Content-Type': 'application/json', ...init.headers },
+    ...init,
+  })
+
+  if (!res.ok) {
+    throw new ApiClientError(res.status, res.statusText, undefined)
+  }
+
+  return res.json() as Promise<T>
+}
+
+export const apiClient = {
+  get: <T>(endpoint: string, options?: RequestOptions) =>
+    request<T>(endpoint, { ...options, method: 'GET' }),
+  post: <T>(endpoint: string, body: unknown, options?: RequestOptions) =>
+    request<T>(endpoint, { ...options, method: 'POST', body: JSON.stringify(body) }),
+  put: <T>(endpoint: string, body: unknown, options?: RequestOptions) =>
+    request<T>(endpoint, { ...options, method: 'PUT', body: JSON.stringify(body) }),
+  patch: <T>(endpoint: string, body: unknown, options?: RequestOptions) =>
+    request<T>(endpoint, { ...options, method: 'PATCH', body: JSON.stringify(body) }),
+  delete: <T>(endpoint: string, options?: RequestOptions) =>
+    request<T>(endpoint, { ...options, method: 'DELETE' }),
+}
+LIB_API_CLIENT
+
+  # lib/types/api.types.ts
+  mkdir -p "$full_path/lib/types"
+  cat >"$full_path/lib/types/api.types.ts" <<'LIB_TYPES_API'
+export interface ApiResponse<T> {
+  data: T
+  message?: string
+  success: boolean
+}
+
+export interface PaginatedResponse<T> extends ApiResponse<T[]> {
+  page: number
+  totalPages: number
+  totalCount: number
+}
+
+export interface ApiError {
+  message: string
+  code?: string
+  statusCode: number
+}
+LIB_TYPES_API
+
+  cat >"$full_path/lib/types/index.ts" <<'LIB_TYPES_INDEX'
+export type * from './api.types'
+LIB_TYPES_INDEX
+
+  # lib/constants/index.ts
+  mkdir -p "$full_path/lib/constants"
+  cat >"$full_path/lib/constants/index.ts" <<'LIB_CONSTANTS'
+export const APP_NAME = 'My App'
+export const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
+LIB_CONSTANTS
+
+  # lib/format.ts
+  cat >"$full_path/lib/format.ts" <<'LIB_FORMAT'
+export function formatDate(date: Date | string, locale = 'en-US'): string {
+  return new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }).format(
+    typeof date === 'string' ? new Date(date) : date
+  )
+}
+
+export function formatCurrency(amount: number, currency = 'USD', locale = 'en-US'): string {
+  return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(amount)
+}
+
+export function truncate(str: string, length: number): string {
+  return str.length > length ? `${str.substring(0, length)}...` : str
+}
+LIB_FORMAT
+
+  # lib/store/ui.store.ts
+  mkdir -p "$full_path/lib/store"
+  cat >"$full_path/lib/store/ui.store.ts" <<'LIB_STORE'
+import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
+
+interface UiState {
+  sidebarOpen: boolean
+  theme: 'light' | 'dark' | 'system'
+  toggleSidebar: () => void
+  setSidebarOpen: (open: boolean) => void
+  setTheme: (theme: 'light' | 'dark' | 'system') => void
+}
+
+export const useUiStore = create<UiState>()(
+  persist(
+    set => ({
+      sidebarOpen: true,
+      theme: 'system',
+      toggleSidebar: () => set(state => ({ sidebarOpen: !state.sidebarOpen })),
+      setSidebarOpen: (open: boolean) => set({ sidebarOpen: open }),
+      setTheme: (theme: 'light' | 'dark' | 'system') => set({ theme }),
+    }),
+    { name: 'ui-store' }
+  )
+)
+LIB_STORE
+
+  # lib/hooks/use-media-query.ts
+  mkdir -p "$full_path/lib/hooks"
+  cat >"$full_path/lib/hooks/use-media-query.ts" <<'LIB_HOOKS'
+'use client'
+
+import { useState, useEffect } from 'react'
+
+export function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(false)
+
+  useEffect(() => {
+    const media = window.matchMedia(query)
+    setMatches(media.matches)
+    const listener = (e: MediaQueryListEvent) => setMatches(e.matches)
+    media.addEventListener('change', listener)
+    return () => media.removeEventListener('change', listener)
+  }, [query])
+
+  return matches
+}
+LIB_HOOKS
+
+  # lib/providers/query-provider.tsx
+  mkdir -p "$full_path/lib/providers"
+  cat >"$full_path/lib/providers/query-provider.tsx" <<'LIB_PROVIDERS_QUERY'
 'use client'
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
-import { ReactNode } from 'react'
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 60_000,
-      gcTime: 5 * 60_000,
-      retry: 1,
-      refetchOnWindowFocus: false,
-    },
-  },
-})
+import { useState, type ReactNode } from 'react'
 
 export function QueryProvider({ children }: { children: ReactNode }) {
+  const [queryClient] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: {
+            staleTime: 60_000,
+            gcTime: 5 * 60_000,
+            retry: 1,
+            refetchOnWindowFocus: false,
+          },
+        },
+      })
+  )
+
   return (
     <QueryClientProvider client={queryClient}>
       {children}
@@ -331,30 +473,38 @@ export function QueryProvider({ children }: { children: ReactNode }) {
     </QueryClientProvider>
   )
 }
-LIB_QUERY
+LIB_PROVIDERS_QUERY
 
-  # lib/store.ts (Zustand store)
-  cat >"$full_path/lib/store.ts" <<'LIB_STORE'
-import { create } from 'zustand'
-
-interface CounterState {
-  count: number
-  increment: () => void
-  decrement: () => void
-  reset: () => void
-}
-
-export const useCounterStore = create<CounterState>(set => ({
-  count: 0,
-  increment: () => set(state => ({ count: state.count + 1 })),
-  decrement: () => set(state => ({ count: state.count - 1 })),
-  reset: () => set({ count: 0 }),
-}))
-LIB_STORE
-
-  # lib/auth.ts (Auth.js config)
+  # lib/providers/index.tsx (with or without auth)
   if [[ "$skip_auth" == false ]]; then
-    cat >"$full_path/lib/auth.ts" <<'LIB_AUTH'
+    cat >"$full_path/lib/providers/index.tsx" <<'LIB_PROVIDERS_AUTH'
+import { SessionProvider } from 'next-auth/react'
+import type { ReactNode } from 'react'
+import { QueryProvider } from './query-provider'
+
+export function Providers({ children }: { children: ReactNode }) {
+  return (
+    <SessionProvider>
+      <QueryProvider>{children}</QueryProvider>
+    </SessionProvider>
+  )
+}
+LIB_PROVIDERS_AUTH
+  else
+    cat >"$full_path/lib/providers/index.tsx" <<'LIB_PROVIDERS_NO_AUTH'
+import type { ReactNode } from 'react'
+import { QueryProvider } from './query-provider'
+
+export function Providers({ children }: { children: ReactNode }) {
+  return <QueryProvider>{children}</QueryProvider>
+}
+LIB_PROVIDERS_NO_AUTH
+  fi
+
+  # lib/auth/config.ts (if auth)
+  if [[ "$skip_auth" == false ]]; then
+    mkdir -p "$full_path/lib/auth"
+    cat >"$full_path/lib/auth/config.ts" <<'LIB_AUTH'
 import NextAuth from 'next-auth'
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
@@ -366,77 +516,260 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 LIB_AUTH
   fi
 
-  print_success "Library files created"
+  print_success "lib/ structure created"
+}
+
+create_components() {
+  print_info "Creating components/ structure..."
+  local full_path="$project_dir/$project_name"
+
+  # components/layout/
+  mkdir -p "$full_path/components/layout"
+  cat >"$full_path/components/layout/Header.tsx" <<'COMP_HEADER'
+import Link from 'next/link'
+import { APP_NAME } from '@/lib/constants'
+
+export function Header() {
+  return (
+    <header className="border-b bg-background">
+      <div className="container mx-auto flex h-16 items-center px-4">
+        <Link href="/" className="text-lg font-semibold">
+          {APP_NAME}
+        </Link>
+        <nav className="ml-auto flex items-center gap-4">
+          {/* Navigation items */}
+        </nav>
+      </div>
+    </header>
+  )
+}
+COMP_HEADER
+
+  cat >"$full_path/components/layout/Footer.tsx" <<'COMP_FOOTER'
+import { APP_NAME } from '@/lib/constants'
+
+export function Footer() {
+  return (
+    <footer className="border-t bg-background">
+      <div className="container mx-auto flex h-16 items-center justify-center px-4">
+        <p className="text-sm text-muted-foreground">
+          © {new Date().getFullYear()} {APP_NAME}. All rights reserved.
+        </p>
+      </div>
+    </footer>
+  )
+}
+COMP_FOOTER
+
+  cat >"$full_path/components/layout/index.ts" <<'COMP_LAYOUT_INDEX'
+export { Header } from './Header'
+export { Footer } from './Footer'
+COMP_LAYOUT_INDEX
+
+  # components/common/
+  mkdir -p "$full_path/components/common"
+  cat >"$full_path/components/common/LoadingSpinner.tsx" <<'COMP_SPINNER'
+import { cn } from '@/lib/utils'
+
+interface LoadingSpinnerProps {
+  className?: string
+  size?: 'sm' | 'md' | 'lg'
+}
+
+const sizeClasses = {
+  sm: 'h-4 w-4 border-2',
+  md: 'h-8 w-8 border-2',
+  lg: 'h-12 w-12 border-4',
+}
+
+export function LoadingSpinner({ className, size = 'md' }: LoadingSpinnerProps) {
+  return (
+    <div
+      role="status"
+      aria-label="Loading"
+      className={cn(
+        'animate-spin rounded-full border-muted border-t-primary',
+        sizeClasses[size],
+        className
+      )}
+    />
+  )
+}
+COMP_SPINNER
+
+  cat >"$full_path/components/common/EmptyState.tsx" <<'COMP_EMPTY'
+interface EmptyStateProps {
+  title: string
+  description?: string
+  action?: React.ReactNode
+}
+
+export function EmptyState({ title, description, action }: EmptyStateProps) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-4 py-16 text-center">
+      <h3 className="text-lg font-semibold">{title}</h3>
+      {description && <p className="text-sm text-muted-foreground">{description}</p>}
+      {action}
+    </div>
+  )
+}
+COMP_EMPTY
+
+  cat >"$full_path/components/common/ErrorBoundary.tsx" <<'COMP_ERROR'
+'use client'
+
+import { Component, type ReactNode } from 'react'
+
+interface Props {
+  children: ReactNode
+  fallback?: ReactNode
+}
+
+interface State {
+  hasError: boolean
+  error?: Error
+}
+
+export class ErrorBoundary extends Component<Props, State> {
+  state: State = { hasError: false }
+
+  static getDerivedStateFromError(error: Error): State {
+    return { hasError: true, error }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        this.props.fallback ?? (
+          <div className="flex min-h-[200px] items-center justify-center">
+            <p className="text-sm text-muted-foreground">Something went wrong.</p>
+          </div>
+        )
+      )
+    }
+    return this.props.children
+  }
+}
+COMP_ERROR
+
+  cat >"$full_path/components/common/index.ts" <<'COMP_COMMON_INDEX'
+export { LoadingSpinner } from './LoadingSpinner'
+export { EmptyState } from './EmptyState'
+export { ErrorBoundary } from './ErrorBoundary'
+COMP_COMMON_INDEX
+
+  print_success "components/ structure created"
+}
+
+create_features() {
+  if [[ "$skip_auth" == false ]]; then
+    print_info "Creating features/ structure..."
+    local full_path="$project_dir/$project_name"
+
+    # features/auth/
+    mkdir -p "$full_path/features/auth/components"
+    mkdir -p "$full_path/features/auth/hooks"
+    mkdir -p "$full_path/features/auth/types"
+
+    cat >"$full_path/features/auth/types/auth.types.ts" <<'FEAT_AUTH_TYPES'
+export interface User {
+  id: string
+  name: string | null
+  email: string | null
+  image: string | null
+}
+
+export interface Session {
+  user: User
+  expires: string
+}
+FEAT_AUTH_TYPES
+
+    cat >"$full_path/features/auth/hooks/use-auth.ts" <<'FEAT_AUTH_HOOKS'
+'use client'
+
+import { useSession, signIn, signOut } from 'next-auth/react'
+
+export function useAuth() {
+  const { data: session, status } = useSession()
+  return {
+    user: session?.user ?? null,
+    isAuthenticated: status === 'authenticated',
+    isLoading: status === 'loading',
+    signIn: (provider?: string) => signIn(provider),
+    signOut: () => signOut(),
+  }
+}
+FEAT_AUTH_HOOKS
+
+    cat >"$full_path/features/auth/components/LoginForm.tsx" <<'FEAT_AUTH_LOGIN'
+'use client'
+
+import { signIn } from 'next-auth/react'
+import { Button } from '@/components/ui/button'
+
+export function LoginForm() {
+  return (
+    <div className="flex flex-col gap-4">
+      <Button onClick={() => signIn('github')} variant="outline" className="w-full">
+        Sign in with GitHub
+      </Button>
+    </div>
+  )
+}
+FEAT_AUTH_LOGIN
+
+    cat >"$full_path/features/auth/index.ts" <<'FEAT_AUTH_INDEX'
+export { LoginForm } from './components/LoginForm'
+export { useAuth } from './hooks/use-auth'
+export type { User, Session } from './types/auth.types'
+FEAT_AUTH_INDEX
+
+    print_success "features/ structure created"
+  fi
 }
 
 create_app_files() {
-  print_info "Creating app structure..."
+  print_info "Creating app/ structure..."
   local full_path="$project_dir/$project_name"
 
   # app/layout.tsx
-  if [[ "$skip_auth" == false ]]; then
-    cat >"$full_path/app/layout.tsx" <<'APP_LAYOUT_AUTH'
+  cat >"$full_path/app/layout.tsx" <<'APP_LAYOUT'
 import type { Metadata } from 'next'
-import { SessionProvider } from 'next-auth/react'
-import { QueryProvider } from '@/lib/query'
+import { Providers } from '@/lib/providers'
+import { APP_NAME } from '@/lib/constants'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Create Next App',
-  description: 'Generated by create next app',
+  title: { template: `%s | ${APP_NAME}`, default: APP_NAME },
+  description: 'Your application description',
 }
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body>
-        <SessionProvider>
-          <QueryProvider>{children}</QueryProvider>
-        </SessionProvider>
+        <Providers>{children}</Providers>
       </body>
     </html>
   )
 }
-APP_LAYOUT_AUTH
-  else
-    cat >"$full_path/app/layout.tsx" <<'APP_LAYOUT_NO_AUTH'
-import type { Metadata } from 'next'
-import { QueryProvider } from '@/lib/query'
-import './globals.css'
-
-export const metadata: Metadata = {
-  title: 'Create Next App',
-  description: 'Generated by create next app',
-}
-
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
-  return (
-    <html lang="en">
-      <body>
-        <QueryProvider>{children}</QueryProvider>
-      </body>
-    </html>
-  )
-}
-APP_LAYOUT_NO_AUTH
-  fi
+APP_LAYOUT
 
   # app/page.tsx
   cat >"$full_path/app/page.tsx" <<'APP_PAGE'
+import { Header, Footer } from '@/components/layout'
+
 export default function Home() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center p-24">
-      <h1 className="text-4xl font-bold">Hello World</h1>
-      <p className="text-lg text-gray-600">Welcome to your Next.js app</p>
-    </main>
+    <>
+      <Header />
+      <main className="container mx-auto flex min-h-[calc(100vh-8rem)] flex-col items-center justify-center px-4 py-16">
+        <h1 className="text-4xl font-bold">Welcome</h1>
+        <p className="mt-4 text-lg text-muted-foreground">Your Next.js app is ready.</p>
+      </main>
+      <Footer />
+    </>
   )
 }
 APP_PAGE
@@ -474,12 +807,12 @@ APP_ERROR
 
   # app/loading.tsx
   cat >"$full_path/app/loading.tsx" <<'APP_LOADING'
+import { LoadingSpinner } from '@/components/common'
+
 export default function Loading() {
   return (
     <div className="flex min-h-screen items-center justify-center">
-      <div className="animate-spin">
-        <div className="h-12 w-12 rounded-full border-4 border-gray-200 border-t-blue-500" />
-      </div>
+      <LoadingSpinner size="lg" />
     </div>
   )
 }
@@ -493,7 +826,7 @@ export default function NotFound() {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-24">
       <h2 className="text-2xl font-bold">Not Found</h2>
-      <p className="text-gray-600">Could not find the requested resource</p>
+      <p className="text-muted-foreground">Could not find the requested resource</p>
       <Link href="/" className="text-blue-500 hover:underline">
         Return Home
       </Link>
@@ -502,18 +835,44 @@ export default function NotFound() {
 }
 APP_NOT_FOUND
 
-  # Auth.js API route (if auth enabled)
+  # Auth routes (if auth)
   if [[ "$skip_auth" == false ]]; then
+    mkdir -p "$full_path/app/(auth)/login"
     mkdir -p "$full_path/app/api/auth"
+
+    cat >"$full_path/app/(auth)/layout.tsx" <<'AUTH_LAYOUT'
+export default function AuthLayout({ children }: { children: React.ReactNode }) {
+  return <div className="min-h-screen bg-muted/50">{children}</div>
+}
+AUTH_LAYOUT
+
+    cat >"$full_path/app/(auth)/login/page.tsx" <<'AUTH_LOGIN'
+import { LoginForm } from '@/features/auth'
+
+export default function LoginPage() {
+  return (
+    <main className="flex min-h-screen items-center justify-center px-4">
+      <div className="w-full max-w-sm space-y-6">
+        <div className="space-y-2 text-center">
+          <h1 className="text-2xl font-bold">Sign in</h1>
+          <p className="text-muted-foreground">Choose a provider to continue</p>
+        </div>
+        <LoginForm />
+      </div>
+    </main>
+  )
+}
+AUTH_LOGIN
+
     cat >"$full_path/app/api/auth/[...nextauth]/route.ts" <<'AUTH_ROUTE'
-import { handlers } from '@/lib/auth'
+import { handlers } from '@/lib/auth/config'
 
 export const GET = handlers.GET
 export const POST = handlers.POST
 AUTH_ROUTE
   fi
 
-  print_success "App files created"
+  print_success "app/ structure created"
 }
 
 create_middleware() {
@@ -522,7 +881,7 @@ create_middleware() {
     local full_path="$project_dir/$project_name"
 
     cat >"$full_path/middleware.ts" <<'MIDDLEWARE'
-import { auth } from '@/lib/auth'
+import { auth } from '@/lib/auth/config'
 
 export default auth(req => {
   // Middleware runs for all routes; add protected route logic here if needed
@@ -541,10 +900,12 @@ MIDDLEWARE
 }
 
 create_test_files() {
-  print_info "Creating test setup..."
+  print_info "Creating tests/ structure..."
   local full_path="$project_dir/$project_name"
 
-  mkdir -p "$full_path/tests"
+  mkdir -p "$full_path/tests/fixtures"
+  mkdir -p "$full_path/tests/unit/lib"
+  mkdir -p "$full_path/tests/integration/components/common"
 
   # vitest.config.ts
   cat >"$full_path/vitest.config.ts" <<'VITEST_CONFIG'
@@ -561,7 +922,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
-      include: ['app/**', 'components/**', 'lib/**'],
+      include: ['app/**', 'components/**', 'features/**', 'lib/**'],
       exclude: ['**/*.test.ts', '**/*.test.tsx', '**/node_modules/**'],
     },
   },
@@ -576,63 +937,115 @@ VITEST_CONFIG
   # tests/setup.ts
   cat >"$full_path/tests/setup.ts" <<'TEST_SETUP'
 import '@testing-library/jest-dom'
-import { expect, afterEach, vi } from 'vitest'
+import { afterEach, afterAll, beforeAll, vi } from 'vitest'
 import { cleanup } from '@testing-library/react'
+import { setupServer } from 'msw/node'
+import { handlers } from './fixtures/handlers'
 
+export const server = setupServer(...handlers)
+
+beforeAll(() => server.listen({ onUnhandledRequest: 'warn' }))
 afterEach(() => {
   cleanup()
+  server.resetHandlers()
 })
+afterAll(() => server.close())
 
-// Mock Next.js router
 vi.mock('next/navigation', () => ({
   useRouter() {
     return {
       push: vi.fn(),
       replace: vi.fn(),
       prefetch: vi.fn(),
+      back: vi.fn(),
     }
   },
   useSearchParams() {
     return new URLSearchParams()
   },
   usePathname() {
-    return ''
+    return '/'
   },
 }))
 TEST_SETUP
 
-  # tests/app/page.test.tsx
-  mkdir -p "$full_path/tests/app"
-  cat >"$full_path/tests/app/page.test.tsx" <<'PAGE_TEST'
-import { render, screen } from '@testing-library/react'
-import { describe, it, expect } from 'vitest'
-import Home from '@/app/page'
+  # tests/fixtures/handlers.ts
+  cat >"$full_path/tests/fixtures/handlers.ts" <<'TEST_HANDLERS'
+import { http, HttpResponse } from 'msw'
 
-describe('Home Page', () => {
-  it('renders the heading', () => {
-    render(<Home />)
-    expect(screen.getByText('Hello World')).toBeDefined()
+export const handlers = [
+  http.get('/api/health', () => {
+    return HttpResponse.json({ status: 'ok' })
+  }),
+]
+TEST_HANDLERS
+
+  # tests/fixtures/factories.ts
+  cat >"$full_path/tests/fixtures/factories.ts" <<'TEST_FACTORIES'
+export function createUser(overrides: Partial<{ id: string; name: string; email: string }> = {}) {
+  return {
+    id: 'user-1',
+    name: 'Test User',
+    email: 'test@example.com',
+    ...overrides,
+  }
+}
+TEST_FACTORIES
+
+  # tests/unit/lib/format.test.ts
+  cat >"$full_path/tests/unit/lib/format.test.ts" <<'TEST_FORMAT'
+import { describe, it, expect } from 'vitest'
+import { formatDate, truncate } from '@/lib/format'
+
+describe('format utilities', () => {
+  describe('formatDate', () => {
+    it('formats a date string', () => {
+      const result = formatDate('2024-01-15')
+      expect(result).toMatch(/Jan/)
+    })
   })
 
-  it('renders the welcome message', () => {
-    render(<Home />)
-    expect(screen.getByText('Welcome to your Next.js app')).toBeDefined()
+  describe('truncate', () => {
+    it('truncates long strings', () => {
+      expect(truncate('Hello World', 5)).toBe('Hello...')
+    })
+
+    it('returns original string if short enough', () => {
+      expect(truncate('Hi', 5)).toBe('Hi')
+    })
   })
 })
-PAGE_TEST
+TEST_FORMAT
 
-  print_success "Test files created"
+  # tests/integration/components/common/LoadingSpinner.test.tsx
+  cat >"$full_path/tests/integration/components/common/LoadingSpinner.test.tsx" <<'TEST_SPINNER'
+import { render, screen } from '@testing-library/react'
+import { describe, it, expect } from 'vitest'
+import { LoadingSpinner } from '@/components/common'
+
+describe('LoadingSpinner', () => {
+  it('renders with loading status', () => {
+    render(<LoadingSpinner />)
+    expect(screen.getByRole('status')).toBeDefined()
+  })
+
+  it('applies size classes correctly', () => {
+    const { rerender } = render(<LoadingSpinner size="sm" />)
+    expect(screen.getByRole('status').className).toContain('h-4')
+
+    rerender(<LoadingSpinner size="lg" />)
+    expect(screen.getByRole('status').className).toContain('h-12')
+  })
+})
+TEST_SPINNER
+
+  print_success "tests/ structure created"
 }
 
 add_package_scripts() {
   print_info "Configuring package.json scripts..."
   local full_path="$project_dir/$project_name"
 
-  # Read current package.json
-  local pkg_file="$full_path/package.json"
-  local temp_pkg="/tmp/package.json.tmp"
-
-  # Use jq or npm to add scripts
   run_cmd npm pkg --prefix "$full_path" set scripts.type-check="tsc --noEmit"
   run_cmd npm pkg --prefix "$full_path" set scripts.test="vitest run"
   run_cmd npm pkg --prefix "$full_path" set scripts.test:watch="vitest"
@@ -698,20 +1111,23 @@ EDITOR_CONFIG
 *.md text eol=lf
 GIT_ATTRIBUTES
 
-  # Patch eslint.config.mjs to add prettier compatibility
-  if [[ -f "$full_path/eslint.config.mjs" ]]; then
-    # Add prettier to eslint config (simple append for compatibility)
-    cat >>"$full_path/eslint.config.mjs" <<'ESLINT_PRETTIER'
+  # eslint.config.mjs (rewritten)
+  cat >"$full_path/eslint.config.mjs" <<'ESLINT_CONFIG'
+import { dirname } from 'path'
+import { fileURLToPath } from 'url'
+import { FlatCompat } from '@eslint/eslintrc'
+import eslintConfigPrettier from 'eslint-config-prettier'
 
-// Prettier compatibility
-import prettier from 'eslint-config-prettier'
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
+
+const compat = new FlatCompat({ baseDirectory: __dirname })
 
 export default [
-  ...eslintConfig,
-  prettier,
+  ...compat.extends('next/core-web-vitals', 'next/typescript'),
+  eslintConfigPrettier,
 ]
-ESLINT_PRETTIER
-  fi
+ESLINT_CONFIG
 
   print_success "Code quality tools configured"
 }
@@ -720,26 +1136,22 @@ create_env_files() {
   print_info "Creating environment files..."
   local full_path="$project_dir/$project_name"
 
-  # Generate AUTH_SECRET
   local auth_secret=""
   if command -v openssl &>/dev/null; then
     auth_secret=$(openssl rand -base64 32)
   else
-    # Fallback if openssl not available
     auth_secret=$(head -c 32 /dev/urandom | base64)
   fi
 
-  # .env.local (gitignored, with actual secret)
   cat >"$full_path/.env.local" <<ENV_LOCAL
 AUTH_SECRET="${auth_secret}"
 ENV_LOCAL
 
-  # .env.local.example (committed, template only)
   cat >"$full_path/.env.local.example" <<'ENV_EXAMPLE'
 # Authentication
-AUTH_SECRET=your-secret-here
+AUTH_SECRET=your-generated-secret-here
 
-# API endpoints
+# API Configuration
 # NEXT_PUBLIC_API_URL=http://localhost:3000/api
 ENV_EXAMPLE
 
@@ -751,7 +1163,6 @@ create_docker_files() {
     print_info "Creating Docker configuration..."
     local full_path="$project_dir/$project_name"
 
-    # Dockerfile
     cat >"$full_path/Dockerfile" <<'DOCKERFILE'
 FROM node:20-alpine AS deps
 WORKDIR /app
@@ -781,7 +1192,6 @@ ENV PORT 3000
 CMD ["node", "server.js"]
 DOCKERFILE
 
-    # .dockerignore
     cat >"$full_path/.dockerignore" <<'DOCKERIGNORE'
 .git
 .gitignore
@@ -794,7 +1204,6 @@ coverage
 README.md
 DOCKERIGNORE
 
-    # docker-compose.yml
     cat >"$full_path/docker-compose.yml" <<'DOCKER_COMPOSE'
 version: '3.8'
 
@@ -891,29 +1300,53 @@ create_readme() {
   cat >"$full_path/README.md" <<'README_TEMPLATE'
 # PROJECT_NAME
 
-A modern full-stack Next.js 15 application with TypeScript, Tailwind CSS, shadcn/ui, Zustand, TanStack Query, and Auth.js.
+A production-ready Next.js 15 application with feature-based architecture, comprehensive testing, and commercial-grade tooling.
 
 ## Stack
 
 - **Framework**: Next.js 15 (App Router)
-- **Language**: TypeScript
+- **Language**: TypeScript (strict mode)
 - **Styling**: Tailwind CSS + shadcn/ui
-- **State Management**: Zustand (client) + TanStack Query (server)
-- **Authentication**: Auth.js (NextAuth)
-- **Testing**: Vitest + React Testing Library
-- **Code Quality**: ESLint + Prettier + Husky + lint-staged
-- **Containerization**: Docker (multi-stage)
+- **State**: Zustand (client) + TanStack Query (server)
+- **Auth**: Auth.js (NextAuth)
+- **Testing**: Vitest + React Testing Library + MSW
+- **Code Quality**: ESLint + Prettier + Husky hooks
 - **CI/CD**: GitHub Actions
+- **Deployment**: Docker (multi-stage build)
 
-## Setup
+## Project Structure
+
+```
+app/                    # Next.js routing (pages, layouts, API routes)
+components/             # Shared React components
+  ├── ui/              # shadcn/ui components
+  ├── layout/          # Header, Footer, etc.
+  └── common/          # LoadingSpinner, ErrorBoundary, EmptyState
+features/              # Self-contained feature modules (auth, etc.)
+lib/                   # Core utilities and config
+  ├── api/            # Type-safe API client
+  ├── auth/           # Auth.js configuration
+  ├── constants/      # App-wide constants
+  ├── hooks/          # Shared custom hooks
+  ├── providers/      # React context providers
+  ├── store/          # Zustand stores
+  ├── types/          # TypeScript interfaces
+  ├── format.ts       # Formatting utilities
+  └── utils.ts        # shadcn cn() helper
+tests/                # Test infrastructure
+  ├── fixtures/       # MSW handlers, test factories
+  ├── unit/          # Pure function tests
+  └── integration/    # Component tests
+```
+
+## Getting Started
 
 ```bash
 # Install dependencies
 npm install
 
-# Set up environment variables
+# Set up environment
 cp .env.local.example .env.local
-# Edit .env.local with your values
 
 # Run dev server
 npm run dev
@@ -925,157 +1358,166 @@ open http://localhost:3000
 ## Available Commands
 
 ```bash
-# Development
-npm run dev         # Start dev server
-npm run build       # Build for production
-npm start           # Start production server
+npm run dev             # Start development server
+npm run build           # Build for production
+npm start               # Run production server
 
-# Code Quality
-npm run lint        # Run ESLint
-npm run format      # Format with Prettier
-npm run type-check  # Run TypeScript type check
+npm run type-check      # TypeScript type checking
+npm run lint            # ESLint + Prettier check
+npm run format          # Auto-format code
 
-# Testing
-npm test            # Run tests once
-npm run test:watch  # Watch mode
-npm test:coverage   # With coverage report
+npm test                # Run all tests
+npm run test:watch      # Watch mode
+npm run test:coverage   # With coverage report
 ```
 
-## Project Structure
+## Architecture Patterns
+
+### Feature-Based Organization
+
+Each feature lives in its own directory under `features/`:
 
 ```
-src/
-├── app/                 # Next.js App Router pages
-├── components/          # React components
-│   └── ui/             # shadcn/ui components
-├── lib/                 # Utilities and configuration
-│   ├── query.tsx       # TanStack Query provider
-│   ├── store.ts        # Zustand stores
-│   ├── auth.ts         # Auth.js config
-│   └── utils.ts        # Helper functions
-├── middleware.ts        # Next.js middleware
-└── tests/              # Test files
+features/auth/
+  ├── components/      # Feature-specific components
+  ├── hooks/          # Feature-specific hooks (e.g., useAuth)
+  ├── types/          # Feature types
+  └── index.ts        # Public API / barrel export
 ```
 
-## Docker
+### API Client
 
-```bash
-# Build image
-docker build -t myapp .
-
-# Run container
-docker run -p 3000:3000 -e AUTH_SECRET=your-secret myapp
-
-# Or use docker-compose
-docker-compose up
-```
-
-## Authentication
-
-Auth.js is pre-configured. To add providers:
-
-1. Edit `lib/auth.ts` and add your provider(s)
-2. Set required environment variables in `.env.local`
-3. Add login/logout UI components as needed
-
-See [Auth.js docs](https://authjs.dev/) for details.
-
-## State Management
-
-### Client State (Zustand)
+Use the typed `apiClient` from `lib/api/client`:
 
 ```tsx
-import { useCounterStore } from '@/lib/store'
+import { apiClient } from '@/lib/api/client'
 
-export function Counter() {
-  const { count, increment } = useCounterStore()
-  return <button onClick={increment}>{count}</button>
+const todos = await apiClient.get<Todo[]>('/api/todos')
+const newTodo = await apiClient.post<Todo>('/api/todos', { title: 'My Todo' })
+```
+
+### State Management
+
+**Client state** (Zustand):
+
+```tsx
+import { useUiStore } from '@/lib/store/ui.store'
+
+const { sidebarOpen, toggleSidebar } = useUiStore()
+```
+
+**Server state** (TanStack Query):
+
+```tsx
+const { data: todos } = useQuery({
+  queryKey: ['todos'],
+  queryFn: () => apiClient.get<Todo[]>('/api/todos'),
+})
+```
+
+### Authentication
+
+Protected routes via middleware:
+
+```ts
+// middleware.ts - automatically runs for all routes
+export const config = {
+  matcher: ['/((?!api|_next/static).*)',]
 }
 ```
 
-### Server State (TanStack Query)
+Add providers in `lib/auth/config.ts`:
 
-```tsx
-'use client'
-
-import { useQuery } from '@tanstack/react-query'
-
-export function TodoList() {
-  const { data, isLoading } = useQuery({
-    queryKey: ['todos'],
-    queryFn: async () => {
-      const res = await fetch('/api/todos')
-      return res.json()
-    },
-  })
-
-  if (isLoading) return <div>Loading...</div>
-  return <ul>{data?.map(todo => <li key={todo.id}>{todo.title}</li>)}</ul>
-}
+```ts
+export const { handlers, auth } = NextAuth({
+  providers: [
+    GitHub({ clientId: process.env.GITHUB_ID, ... }),
+  ],
+})
 ```
 
-## Testing
+### Testing
 
-Tests run with Vitest and React Testing Library. Example:
+**Unit tests** (`tests/unit/`):
 
 ```tsx
-import { render, screen } from '@testing-library/react'
 import { describe, it, expect } from 'vitest'
-import Home from '@/app/page'
+import { formatDate } from '@/lib/format'
 
-describe('Home', () => {
-  it('renders heading', () => {
-    render(<Home />)
-    expect(screen.getByText('Hello World')).toBeDefined()
+describe('formatDate', () => {
+  it('formats dates correctly', () => {
+    expect(formatDate('2024-01-15')).toMatch(/Jan/)
   })
 })
 ```
 
-Run tests:
-
-```bash
-npm test           # Once
-npm run test:watch # Watch mode
-npm run test:coverage  # With coverage
-```
-
-## Styling
-
-Use Tailwind CSS classes directly or import shadcn/ui components:
+**Integration tests** (`tests/integration/`):
 
 ```tsx
-import { Button } from '@/components/ui/button'
+import { render, screen } from '@testing-library/react'
+import { LoadingSpinner } from '@/components/common'
 
-export function MyComponent() {
-  return (
-    <div className="flex gap-4 p-6">
-      <Button>Click me</Button>
-    </div>
-  )
-}
+it('renders spinner', () => {
+  render(<LoadingSpinner />)
+  expect(screen.getByRole('status')).toBeDefined()
+})
 ```
 
-Add new shadcn/ui components:
+### Code Quality
+
+Automatic code formatting and linting via pre-commit hooks (Husky):
 
 ```bash
-npx shadcn-ui@latest add <component-name>
+git add .
+git commit -m "feat: add feature"
+# Husky runs: prettier --write, eslint --fix
 ```
+
+## Deployment
+
+### Vercel (Recommended)
+
+```bash
+git push  # GitHub Actions runs tests, Vercel auto-deploys on merge
+```
+
+### Docker
+
+```bash
+docker build -t myapp .
+docker run -p 3000:3000 -e AUTH_SECRET=secret myapp
+```
+
+### Environment Variables
+
+Copy `.env.local.example` to `.env.local` and fill in:
+
+- `AUTH_SECRET` (auto-generated during setup)
+- `GITHUB_ID` / `GITHUB_SECRET` (if using GitHub auth)
+- `NEXT_PUBLIC_API_URL` (if using external API)
 
 ## Contributing
 
-1. Create a feature branch
-2. Make your changes
-3. Run `npm run format` to auto-fix formatting
-4. Ensure `npm test` and `npm run type-check` pass
-5. Commit (pre-commit hooks will lint staged files)
-6. Push and open a PR
+1. Create a feature branch: `git checkout -b feature/my-feature`
+2. Make changes + add tests
+3. Commit: `git commit -m "feat: description"`
+4. Pre-commit hooks auto-lint and format
+5. Push + open PR
+
+## Resources
+
+- [Next.js Docs](https://nextjs.org/docs)
+- [TanStack Query](https://tanstack.com/query/latest)
+- [Zustand](https://github.com/pmndrs/zustand)
+- [shadcn/ui](https://ui.shadcn.com)
+- [Auth.js](https://authjs.dev)
+- [Vitest](https://vitest.dev)
 
 ## License
 
 MIT
 README_TEMPLATE
 
-  # Replace placeholder with actual project name
   sed -i "s/PROJECT_NAME/$project_name/g" "$full_path/README.md"
 
   print_success "README created"
@@ -1089,13 +1531,11 @@ initialize_git() {
   run_cmd git -C "$full_path" config user.name "$(git config user.name || echo 'Rich Taft')"
   run_cmd git -C "$full_path" config user.email "$(git config user.email || echo 'rt2726@gmail.com')"
 
-  # Create .gitignore if not present
   if [[ ! -f "$full_path/.gitignore" ]]; then
     cat >"$full_path/.gitignore" <<'GITIGNORE'
 node_modules/
 .next/
 .env.local
-.env.local.backup
 dist/
 build/
 coverage/
@@ -1105,17 +1545,19 @@ GITIGNORE
   fi
 
   run_cmd git -C "$full_path" add .
-  run_cmd git -C "$full_path" commit -m "Initial commit: Next.js 15 project scaffold
+  run_cmd git -C "$full_path" commit -m "Initial commit: Production-ready Next.js scaffold
 
-- Next.js 15 with TypeScript and App Router
-- Tailwind CSS + shadcn/ui component library
-- Zustand for client state, TanStack Query for server state
-- Auth.js pre-configured (NextAuth)
-- Vitest + React Testing Library
-- ESLint + Prettier + Husky pre-commit hooks
-- GitHub Actions CI/CD workflow
+- Feature-based architecture (features/ for scalable apps)
+- Organized lib/ with api/, auth/, constants/, hooks/, providers/, store/, types/
+- Structured components/ with layout/, common/, and shadcn/ui
+- Professional test structure: fixtures/, unit/, integration/
+- TypeScript strict mode + ESLint + Prettier
+- Vitest + React Testing Library + MSW
+- Auth.js pre-configured with middleware
+- TanStack Query for server state + Zustand for client state
 - Docker multi-stage build
-- Full type-safety and test infrastructure"
+- GitHub Actions CI/CD
+- Full test infrastructure with examples"
 
   print_success "Git repository initialized"
 }
@@ -1138,7 +1580,7 @@ run_claude_init() {
     run_cmd claude init --cwd "$full_path"
     print_success "claude init completed"
   else
-    print_warning "Claude CLI not found. Run the following manually:"
+    print_warning "Claude CLI not found. Run manually:"
     echo "  cd $full_path && claude init"
   fi
 }
@@ -1165,6 +1607,8 @@ main() {
   init_shadcn
   patch_next_config
   create_lib_files
+  create_components
+  create_features
   create_app_files
   create_middleware
   create_test_files
@@ -1184,19 +1628,17 @@ main() {
   print_info "Next steps:"
   echo "  1. cd $project_dir/$project_name"
   echo "  2. npm run dev"
-  echo "  3. Open http://localhost:3000 in your browser"
+  echo "  3. Open http://localhost:3000"
   echo
-  print_info "Available commands:"
-  echo "  npm run dev         - Start development server"
+  print_info "Key commands:"
+  echo "  npm run dev         - Development server"
   echo "  npm test            - Run tests"
   echo "  npm run lint        - Check code quality"
-  echo "  npm run format      - Auto-format code"
-  echo "  npm run type-check  - Check TypeScript"
-  echo "  npm run build       - Build for production"
+  echo "  npm run type-check  - TypeScript validation"
+  echo "  npm run build       - Production build"
   echo
 }
 
-# Guard: only run if sourced from command line (not sourced as a library)
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   main "$@"
 fi
