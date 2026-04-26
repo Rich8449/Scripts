@@ -1,22 +1,17 @@
-# new-react-project.sh
+# new-react-project.sh (v2.0.0)
 
-**Scaffolds a modern, production-ready Next.js 15 project with TypeScript, Tailwind CSS, shadcn/ui, Zustand, TanStack Query, Auth.js, Vitest, and GitHub Actions.**
+**Production-ready Next.js 15 project scaffolder with feature-based architecture, professional test setup, and commercial-grade tooling.**
 
 ## Overview
 
-This script automates the creation of a new Next.js application with a carefully curated, commercial-grade technology stack. It follows the same conventions as `new-python-project.sh`: a single shell script that orchestrates all setup, preceded by a `.md` specification (this file).
+This script generates a fully-configured Next.js 15 application designed to scale from startup to enterprise. Projects are ready for immediate development with best practices baked in: feature-based architecture, organized utilities, comprehensive testing, type safety, and professional code quality.
 
-### Key Features
-
-- **Next.js 15** with TypeScript and the App Router (file-based routing)
-- **Tailwind CSS** + **shadcn/ui** for rapid, accessible component development
-- **State Management**: Zustand (client state) + TanStack Query v5 (server/async state)
-- **Authentication**: Auth.js (NextAuth) pre-configured with session support
-- **Full Test Suite**: Vitest + React Testing Library with example tests and coverage
-- **Code Quality**: ESLint + Prettier + Husky pre-commit hooks + lint-staged
-- **CI/CD**: GitHub Actions workflow (lint, type-check, test, build)
-- **Containerization**: Docker with multi-stage build for production deployments
-- **Developer Experience**: Hot module reloading, strict TypeScript, ready for Vercel or self-hosted
+Unlike minimal scaffolders, this generates:
+- **Structured `lib/`** with separated concerns: API client, auth config, constants, custom hooks, providers, state stores, types
+- **Feature modules** under `features/` for self-contained, scalable code organization
+- **Component organization** with separate directories for layout, common reusables, and shadcn/ui
+- **Professional tests** with fixtures, unit tests, and integration tests (plus MSW mocking)
+- **Production-grade tooling**: ESLint, Prettier, Husky, GitHub Actions CI, Docker multi-stage
 
 ---
 
@@ -36,33 +31,33 @@ Or with positional argument:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--name <name>` | string | (required) | Project name; must be alphanumeric with hyphens/underscores, no leading digit |
-| `--dir <dir>` | string | `.` | Parent directory where the project folder is created |
-| `--force` | flag | false | Overwrite existing directory (dangerous) |
-| `--no-auth` | flag | false | Skip Auth.js setup; useful if you'll implement auth separately |
-| `--no-docker` | flag | false | Skip Docker files (Dockerfile, .dockerignore, docker-compose.yml) |
+| `--name <name>` | string | (required) | Project name; alphanumeric + hyphens/underscores, no leading digit |
+| `--dir <dir>` | string | `.` | Parent directory where project folder is created |
+| `--force` | flag | false | Overwrite existing directory |
+| `--no-auth` | flag | false | Skip Auth.js + features/auth/ setup |
+| `--no-docker` | flag | false | Skip Docker files |
 | `--no-ci` | flag | false | Skip GitHub Actions workflow |
-| `--dry-run` | flag | false | Print all commands without executing; useful for preview |
-| `--verbose` | flag | false | Extra logging (shows each command being run) |
-| `--help` | flag | — | Show usage and examples |
+| `--dry-run` | flag | false | Print commands without executing |
+| `--verbose` | flag | false | Show all executed commands |
+| `--help` | flag | — | Show help message |
 
 ### Examples
 
 ```bash
-# Simplest: create in current directory
+# Create in current directory
 ./new-react-project.sh --name my-blog
 
-# Create in a subdirectory
+# Create in subdirectory with custom settings
 ./new-react-project.sh --name my-app --dir ~/projects
 
-# Create without Auth.js (if you'll use external OAuth or sessions)
-./new-react-project.sh my-auth-experiment --no-auth
+# Skip auth for API-only frontend
+./new-react-project.sh api-client --no-auth
 
-# Dry-run to preview what would be created
+# Minimal setup (no Docker, no CI)
+./new-react-project.sh minimal --no-docker --no-ci
+
+# Preview what would be created
 ./new-react-project.sh --name test --dry-run --verbose
-
-# Skip Docker and CI (minimal setup)
-./new-react-project.sh my-app --no-docker --no-ci
 ```
 
 ---
@@ -71,431 +66,455 @@ Or with positional argument:
 
 ```
 my-app/
-├── app/                           # Next.js App Router
-│   ├── layout.tsx                 # Root layout: providers, fonts, metadata
-│   ├── page.tsx                   # Home page (GET /)
-│   ├── error.tsx                  # Error boundary for route segment
-│   ├── loading.tsx                # Suspense fallback
-│   ├── not-found.tsx              # 404 handler
-│   └── api/
-│       └── auth/[...nextauth]/
-│           └── route.ts           # Auth.js API routes (if auth enabled)
+├── app/                                    ← Next.js routing (NO business logic)
+│   ├── (auth)/                             ← Route group for auth pages
+│   │   ├── login/
+│   │   │   └── page.tsx
+│   │   └── layout.tsx
+│   ├── api/
+│   │   └── auth/[...nextauth]/
+│   │       └── route.ts
+│   ├── layout.tsx                          ← Root layout (uses <Providers>)
+│   ├── page.tsx                            ← Home page (with Header/Footer)
+│   ├── error.tsx                           ← Error boundary
+│   ├── loading.tsx                         ← Suspense fallback
+│   └── not-found.tsx                       ← 404 handler
 │
-├── components/
-│   └── ui/                        # shadcn/ui components (auto-added via CLI)
+├── components/                             ← Shared React components
+│   ├── ui/                                 ← shadcn/ui (auto-populated)
+│   ├── layout/
+│   │   ├── Header.tsx
+│   │   ├── Footer.tsx
+│   │   └── index.ts
+│   └── common/
+│       ├── LoadingSpinner.tsx
+│       ├── ErrorBoundary.tsx
+│       ├── EmptyState.tsx
+│       └── index.ts
 │
-├── lib/
-│   ├── utils.ts                   # cn() classname helper for Tailwind
-│   ├── query.tsx                  # TanStack QueryClient provider + devtools
-│   ├── store.ts                   # Zustand store example (counter slice)
-│   └── auth.ts                    # Auth.js configuration (if auth enabled)
+├── features/                               ← Self-contained feature modules
+│   └── auth/                               ← (only if --no-auth not set)
+│       ├── components/
+│       │   └── LoginForm.tsx
+│       ├── hooks/
+│       │   └── use-auth.ts
+│       ├── types/
+│       │   └── auth.types.ts
+│       └── index.ts                        ← Public barrel export
 │
-├── middleware.ts                  # Next.js middleware (auth guards, etc.)
+├── lib/                                    ← Utilities, config, providers
+│   ├── api/
+│   │   └── client.ts                      ← Type-safe fetch client with error handling
+│   ├── auth/
+│   │   └── config.ts                      ← Auth.js config (if auth)
+│   ├── constants/
+│   │   └── index.ts                       ← APP_NAME, APP_URL
+│   ├── hooks/
+│   │   └── use-media-query.ts             ← Custom shared hooks
+│   ├── providers/
+│   │   ├── index.tsx                      ← Combined provider wrapper
+│   │   └── query-provider.tsx             ← TanStack QueryClientProvider
+│   ├── store/
+│   │   └── ui.store.ts                    ← Global UI state (sidebar, theme)
+│   ├── types/
+│   │   ├── api.types.ts                   ← ApiResponse<T>, PaginatedResponse<T>
+│   │   └── index.ts
+│   ├── format.ts                          ← Date, currency, string formatting
+│   └── utils.ts                           ← shadcn cn() helper (auto-created by shadcn)
+│
+├── middleware.ts                           ← Route protection via auth (if auth)
 │
 ├── tests/
-│   ├── setup.ts                   # Vitest globals, RTL cleanup, mocks
-│   └── app/
-│       └── page.test.tsx          # Example: home page smoke test
+│   ├── fixtures/
+│   │   ├── handlers.ts                    ← MSW API mock handlers
+│   │   └── factories.ts                   ← Test data factories
+│   ├── unit/
+│   │   └── lib/
+│   │       └── format.test.ts             ← Pure function unit tests
+│   ├── integration/
+│   │   └── components/
+│   │       └── common/
+│   │           └── LoadingSpinner.test.tsx
+│   └── setup.ts                           ← Vitest + RTL + MSW setup
 │
-├── public/                        # Static assets
+├── public/
 │
 ├── .github/
 │   └── workflows/
-│       └── ci.yml                 # GitHub Actions: lint → type-check → test → build
+│       └── ci.yml                         ← GitHub Actions (lint, type-check, test, build)
 │
-├── .env.local                     # (gitignored) Private secrets; AUTH_SECRET auto-generated
-├── .env.local.example             # (committed) Template for required env vars
+├── .env.local                             ← (gitignored) Secrets + AUTH_SECRET
+├── .env.local.example                     ← (committed) Template
 │
-├── .editorconfig                  # Editor formatting rules (2-space indent, LF line endings, etc.)
-├── .gitattributes                 # Git line-ending normalization
-├── .gitignore                     # Git ignore patterns (node_modules, .next, etc.)
-├── .prettierrc                    # Prettier config: 100 char line length, Tailwind plugin
-├── .prettierignore                # Prettier ignore patterns
+├── .editorconfig
+├── .gitattributes
+├── .gitignore
+├── .prettierrc
+├── .prettierignore
 │
-├── Dockerfile                     # Multi-stage: deps → builder → runner
-├── .dockerignore                  # Docker ignore patterns
-├── docker-compose.yml             # Single-service compose for local development
+├── Dockerfile                             ← Multi-stage (if not --no-docker)
+├── .dockerignore
+├── docker-compose.yml
 │
-├── eslint.config.mjs              # ESLint flat config; includes Prettier compatibility
-├── next.config.ts                 # Next.js config: standalone output for Docker, strict ESLint dirs
-├── tailwind.config.ts             # Tailwind with shadcn preset
-├── tsconfig.json                  # TypeScript: strict mode, path alias @/*
-├── vitest.config.ts               # Vitest: jsdom environment, coverage, setupFiles
+├── eslint.config.mjs                      ← ESLint flat config + prettier
+├── next.config.ts                         ← Standalone output for Docker
+├── tailwind.config.ts                     ← Tailwind config
+├── tsconfig.json                          ← TypeScript (strict mode, @/* alias)
+├── vitest.config.ts                       ← Vitest + jsdom + coverage
 │
-├── package.json                   # Dependencies + custom scripts
-├── package-lock.json              # Locked versions (npm ci for reproducible builds)
+├── package.json
+├── package-lock.json
 │
-└── README.md                      # Project documentation with setup, stack details, examples
+└── README.md                              ← Comprehensive project docs
 ```
 
 ---
 
-## Stack Rationale
+## Stack Details
 
 ### Framework: Next.js 15 + App Router
 
-Next.js is the industry standard for production React applications. The App Router (file-based routing) is the modern approach:
+- File-based routing via `app/` directory
+- Server Components by default (reduce bundle, direct DB access)
+- Dynamic rendering, streaming, and ISR support
+- API routes colocated with app code
+- Automatic optimizations (images, fonts, code splitting)
 
-- **Server Components by default** — reduce client-side JavaScript, better SEO, direct database access
-- **API Routes** — backend endpoints colocated with frontend
-- **Built-in optimization** — image optimization, font loading, code splitting
-- **Deployment** — seamless integration with Vercel; self-hosting support via `output: 'standalone'`
-- **Developer experience** — hot module reloading, TypeScript out of the box, zero-config
+### Language: TypeScript (Strict Mode)
+
+```ts
+// Enforced type safety across the entire codebase
+interface Props { name: string }
+const Component: React.FC<Props> = ({ name }) => <div>{name}</div>
+```
 
 ### Styling: Tailwind CSS + shadcn/ui
 
-- **Tailwind CSS** — utility-first, atomic styling; scales to large projects without CSS bloat
-- **shadcn/ui** — pre-built, accessible, unstyled React components; you own the code (not a package), customize freely
-- **Tailwind Prettier plugin** — auto-sorts class names for consistency
+- **Tailwind**: utility-first, atomic styling; scales to any size
+- **shadcn/ui**: pre-built, accessible, unstyled components you own
+
+```tsx
+import { Button } from '@/components/ui/button'
+
+<Button variant="outline" size="sm">Click me</Button>
+```
 
 ### State Management: Zustand + TanStack Query
 
-- **Zustand** — minimal, unopinionated client-state library; no Redux boilerplate, fast
-- **TanStack Query (React Query)** — server/async state management; handles caching, refetching, mutations; reduces useEffect complexity
-- **Separation of concerns** — Zustand for UI state (theme, modals, filters); TanStack for API data (todos, users, etc.)
+**Client state** (Zustand):
+```ts
+import { useUiStore } from '@/lib/store/ui.store'
+const { sidebarOpen, toggleSidebar } = useUiStore()
+```
 
-### Authentication: Auth.js (NextAuth)
+**Server/API state** (TanStack Query):
+```tsx
+const { data: todos } = useQuery({
+  queryKey: ['todos'],
+  queryFn: () => apiClient.get<Todo[]>('/api/todos'),
+})
+```
 
-- **Auth.js** (formerly NextAuth.js) — production-grade authentication library
-- Pre-configured session provider, middleware for protected routes, and placeholder providers
-- Supports OAuth (Google, GitHub, etc.), email, credentials, and custom providers
-- Secure by default: `AUTH_SECRET` auto-generated and stored in `.env.local`
+### Authentication: Auth.js (NextAuth v5)
 
-### Testing: Vitest + React Testing Library
+```ts
+// lib/auth/config.ts
+export const { handlers, auth, signIn, signOut } = NextAuth({
+  providers: [GitHub(), Google()],  // Add your providers
+})
+```
 
-- **Vitest** — Vite-native test runner; faster than Jest, great for modern ESM codebases
-- **React Testing Library** — query by user interactions, not implementation details; encourages testing best practices
-- **Example test** included: smoke test for the home page
+- Session management (client + server)
+- OAuth provider support (GitHub, Google, etc.)
+- Email/credentials authentication
+- Protected routes via middleware
+- Type-safe session in components
 
-### Code Quality: ESLint + Prettier + Husky + lint-staged
+### Testing: Vitest + React Testing Library + MSW
 
-- **ESLint** — static analysis; enforces consistency and catches common bugs
-- **Prettier** — opinionated formatter; removes bikeshedding
-- **Husky + lint-staged** — pre-commit hooks; lint and format only staged files before commit
-- No manual formatting; tools run automatically
+```tsx
+// tests/unit/lib/format.test.ts (pure function)
+describe('formatDate', () => {
+  it('formats dates', () => {
+    expect(formatDate('2024-01-15')).toMatch(/Jan/)
+  })
+})
+
+// tests/integration/components/common/LoadingSpinner.test.tsx
+describe('LoadingSpinner', () => {
+  it('renders with status', () => {
+    render(<LoadingSpinner />)
+    expect(screen.getByRole('status')).toBeDefined()
+  })
+})
+
+// tests/fixtures/handlers.ts (MSW mocks)
+export const handlers = [
+  http.get('/api/todos', () => HttpResponse.json([{ id: 1, title: 'Test' }])),
+]
+```
+
+### Code Quality: ESLint + Prettier + Husky
+
+- ESLint: static analysis (finds bugs, enforces patterns)
+- Prettier: opinionated formatter (removes bikeshedding)
+- Husky + lint-staged: auto-run on pre-commit
+
+```bash
+git add .
+git commit -m "feat: add feature"
+# Pre-commit hook runs: prettier --write, eslint --fix
+# Test, build, lint in CI via GitHub Actions
+```
 
 ### CI/CD: GitHub Actions
 
-- Triggers on push to `main`, `develop`, `feature/**`; on PRs to `main`
-- Pipeline: `npm lint` → `npm run type-check` → `npm test -- --coverage` → `npm run build`
-- Codecov integration for coverage tracking (optional)
+```yaml
+# Triggers on push to main, feature branches, PRs
+# Runs: lint → type-check → test (with coverage) → build
+```
 
-### Docker: Multi-Stage Build
+### Deployment: Docker Multi-Stage
 
-- **Stage 1: deps** — install production dependencies
-- **Stage 2: builder** — full build (dev deps, Next.js compilation)
-- **Stage 3: runner** — minimal production image; copies `.next/standalone` (output via `next.config.ts`)
-- **Result** — small, fast, secure image; runs `node server.js` on port 3000
+```dockerfile
+# Stage 1: Install deps
+# Stage 2: Build Next.js app
+# Stage 3: Minimal runtime (copies .next/standalone)
+```
+
+```bash
+docker build -t myapp .
+docker run -p 3000:3000 -e AUTH_SECRET=secret myapp
+```
+
+Or: `docker-compose up`
 
 ---
 
-## Configuration Files Explained
+## Key Files Explained
 
-### `lib/query.tsx` — TanStack Query Provider
-
-```tsx
-'use client'
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 60_000,          // 1 min before refetch
-      gcTime: 5 * 60_000,          // 5 min cache lifetime
-      retry: 1,                    // retry once on error
-      refetchOnWindowFocus: false, // don't refetch on tab focus
-    },
-  },
-})
-
-export function QueryProvider({ children }: { children: ReactNode }) {
-  return (
-    <QueryClientProvider client={queryClient}>
-      {children}
-      <ReactQueryDevtools initialIsOpen={false} /> {/* Devtools for debugging */}
-    </QueryClientProvider>
-  )
-}
-```
-
-**Usage in components:**
-
-```tsx
-'use client'
-
-export function TodoList() {
-  const { data: todos, isLoading } = useQuery({
-    queryKey: ['todos'],
-    queryFn: async () => {
-      const res = await fetch('/api/todos')
-      if (!res.ok) throw new Error('Failed to fetch')
-      return res.json()
-    },
-  })
-
-  if (isLoading) return <div>Loading...</div>
-  return <ul>{todos?.map(t => <li key={t.id}>{t.title}</li>)}</ul>
-}
-```
-
-### `lib/store.ts` — Zustand Store
+### `lib/api/client.ts` — Type-Safe API Client
 
 ```ts
-interface CounterState {
-  count: number
-  increment: () => void
-  decrement: () => void
-  reset: () => void
-}
+import { apiClient } from '@/lib/api/client'
 
-export const useCounterStore = create<CounterState>(set => ({
-  count: 0,
-  increment: () => set(state => ({ count: state.count + 1 })),
-  decrement: () => set(state => ({ count: state.count - 1 })),
-  reset: () => set({ count: 0 }),
-}))
+// Typed request/response
+const todos = await apiClient.get<Todo[]>('/api/todos')
+const newTodo = await apiClient.post<Todo>('/api/todos', { title: 'Todo' })
+
+// Error handling
+try {
+  await apiClient.delete('/api/todos/1')
+} catch (error) {
+  if (error instanceof ApiClientError) {
+    console.log(`Error ${error.statusCode}: ${error.message}`)
+  }
+}
 ```
 
-**Usage:**
+### `lib/providers/index.tsx` — Combined Providers
 
 ```tsx
-'use client'
+// app/layout.tsx
+import { Providers } from '@/lib/providers'
 
-export function Counter() {
-  const { count, increment, reset } = useCounterStore()
-  return (
-    <div>
-      <p>Count: {count}</p>
-      <button onClick={increment}>+1</button>
-      <button onClick={reset}>Reset</button>
-    </div>
-  )
+export default function RootLayout({ children }) {
+  return <Providers>{children}</Providers>
 }
+
+// Providers wraps: SessionProvider → QueryProvider → children
 ```
 
-**Multi-slice store (recommended pattern):**
+### `lib/store/ui.store.ts` — Persistent Global State
 
 ```ts
-// lib/store/counter.ts
-export const useCounterSlice = (set: SetState) => ({ ... })
+const { sidebarOpen, toggleSidebar, theme, setTheme } = useUiStore()
 
-// lib/store/user.ts
-export const useUserSlice = (set: SetState) => ({ ... })
-
-// lib/store.ts
-export const useStore = create((...args) => ({
-  ...useCounterSlice(...args),
-  ...useUserSlice(...args),
-}))
+// Automatically saved to localStorage as 'ui-store'
+// Survives page refreshes
 ```
 
-### `lib/auth.ts` — Auth.js Configuration
+### `lib/format.ts` — Formatting Utilities
 
 ```ts
-import NextAuth from 'next-auth'
-import GitHub from 'next-auth/providers/github'
-import Google from 'next-auth/providers/google'
+import { formatDate, formatCurrency, truncate } from '@/lib/format'
 
-export const { handlers, auth, signIn, signOut } = NextAuth({
-  providers: [
-    GitHub({ clientId: process.env.GITHUB_ID, clientSecret: process.env.GITHUB_SECRET }),
-    Google({ clientId: process.env.GOOGLE_ID, clientSecret: process.env.GOOGLE_SECRET }),
-  ],
-  pages: {
-    signIn: '/login',        // Custom login page (optional)
-    signOut: '/logout',      // Custom logout page
-    error: '/auth-error',    // Error page
-  },
-})
+formatDate('2024-01-15')           // → 'Jan 15, 2024'
+formatCurrency(1234.56, 'USD')     // → '$1,234.56'
+truncate('Hello World', 5)         // → 'Hello...'
 ```
 
-**Session usage in components:**
+### `features/auth/` — Self-Contained Feature Module
 
 ```tsx
-import { auth } from '@/lib/auth'
-
-export async function UserGreeting() {
-  const session = await auth()
-  if (!session) return <div>Please log in</div>
-  return <div>Hello, {session.user?.name}</div>
+// features/auth/hooks/use-auth.ts
+export function useAuth() {
+  const { user, isAuthenticated, signIn, signOut } = useAuth()
+  // Custom logic here
 }
+
+// features/auth/components/LoginForm.tsx
+export function LoginForm() { /* component */ }
+
+// features/auth/index.ts (public API)
+export { useAuth } from './hooks/use-auth'
+export { LoginForm } from './components/LoginForm'
+export type { User, Session } from './types/auth.types'
+
+// Usage in other features:
+import { useAuth, LoginForm } from '@/features/auth'
 ```
 
-**Client-side session (requires SessionProvider in layout):**
-
-```tsx
-'use client'
-
-import { useSession } from 'next-auth/react'
-
-export function ClientUserGreeting() {
-  const { data: session } = useSession()
-  return session ? <div>Hello, {session.user?.name}</div> : <LoginButton />
-}
-```
-
-### `app/layout.tsx` — Root Layout with Providers
-
-```tsx
-import { SessionProvider } from 'next-auth/react'
-import { QueryProvider } from '@/lib/query'
-
-export const metadata: Metadata = {
-  title: 'My App',
-  description: 'Description here',
-}
-
-export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <html lang="en">
-      <body>
-        <SessionProvider>
-          <QueryProvider>
-            {children}
-          </QueryProvider>
-        </SessionProvider>
-      </body>
-    </html>
-  )
-}
-```
-
-**Provider order matters:** SessionProvider wraps QueryProvider (session is needed for auth-protected queries).
-
-### `vitest.config.ts` — Test Configuration
+### `tests/fixtures/handlers.ts` — MSW API Mocking
 
 ```ts
-import path from 'path'
-import { defineConfig } from 'vitest/config'
-import react from '@vitejs/plugin-react'
+import { http, HttpResponse } from 'msw'
 
-export default defineConfig({
-  plugins: [react()],
-  test: {
-    environment: 'jsdom',      // Browser-like DOM for React
-    globals: true,             // describe, it, expect without imports
-    setupFiles: ['tests/setup.ts'],  // Run before each test file
-    coverage: {
-      provider: 'v8',
-      reporter: ['text', 'json', 'html'],
-      include: ['app/**', 'components/**', 'lib/**'],
-    },
-  },
-  resolve: {
-    alias: { '@': path.resolve(__dirname, './') }, // Path alias @/ → root
-  },
-})
+export const handlers = [
+  http.get('/api/todos', () => HttpResponse.json([...])),
+  http.post('/api/todos', ({ request }) => {
+    const body = await request.json()
+    return HttpResponse.json({ id: 1, ...body }, { status: 201 })
+  }),
+]
+
+// Automatically used in tests/setup.ts
+// No real API calls in tests, full control over responses
 ```
 
----
+### `tests/fixtures/factories.ts` — Test Data
 
-## Package Scripts
+```ts
+export function createUser(overrides = {}) {
+  return {
+    id: 'user-1',
+    name: 'Test User',
+    email: 'test@example.com',
+    ...overrides,
+  }
+}
 
-After creation, the following npm scripts are available:
-
-### Development
-
-```bash
-npm run dev          # Start dev server (localhost:3000, HMR enabled)
-npm run build        # Production build
-npm start            # Start production server (requires npm run build first)
+// Usage in tests:
+const user = createUser({ email: 'custom@example.com' })
 ```
-
-### Code Quality
-
-```bash
-npm run lint         # ESLint check
-npm run format       # Auto-format with Prettier
-npm run format:check # Check formatting without fixing
-npm run type-check   # TypeScript type checking (tsc --noEmit)
-```
-
-### Testing
-
-```bash
-npm test                 # Run full test suite once
-npm run test:watch      # Watch mode (re-run on file changes)
-npm run test:coverage   # Run tests with coverage report
-```
-
----
-
-## Dependencies
-
-### Core
-
-- **next** — React framework
-- **react**, **react-dom** — React library
-- **typescript** — Static typing
-
-### UI & Styling
-
-- **tailwindcss** — Utility CSS
-- **@radix-ui/\*** — Headless components (used by shadcn)
-- **class-variance-authority** — Component variant styling
-- **clsx**, **tailwind-merge** — Classname helpers
-
-### State & Data
-
-- **zustand** — Client state management
-- **@tanstack/react-query** — Server state / API caching
-- **@tanstack/react-query-devtools** — Query debugging
-
-### Authentication (optional)
-
-- **next-auth** — Session & OAuth
-
-### Dev Dependencies
-
-- **vitest** — Test runner
-- **@vitest/coverage-v8** — Coverage reporting
-- **@vitest/ui** — Test UI dashboard
-- **@testing-library/react** — React component testing
-- **@testing-library/jest-dom** — DOM matchers
-- **msw** — Mock Service Worker (API mocking)
-- **prettier** — Code formatter
-- **prettier-plugin-tailwindcss** — Tailwind class sorting
-- **eslint** — Linter (Next.js config)
-- **husky** — Git hooks
-- **lint-staged** — Pre-commit linting
 
 ---
 
 ## Development Workflow
 
-### First Time Setup
+### First-Time Setup
 
 ```bash
 cd my-app
-npm install                # Already done by script, but run again if needed
-cp .env.local.example .env.local  # Usually pre-created by script
-npm run dev               # Start dev server
+npm install                        # (already done by script)
+cp .env.local.example .env.local   # Already created, just review
+npm run dev                        # Start dev server on :3000
 ```
 
-### Making Changes
+### Writing Code
 
-1. **Create a feature branch:**
-   ```bash
-   git checkout -b feature/my-feature
-   ```
+**Create a component:**
 
-2. **Write code** (TypeScript enforced):
-   ```bash
-   npm run type-check  # Check types
-   npm test            # Run tests
-   npm run lint        # Check code quality
-   ```
+```tsx
+// components/common/Card.tsx
+import { cn } from '@/lib/utils'
 
-3. **Commit** (pre-commit hooks auto-run):
-   ```bash
-   git add .
-   git commit -m "feat: add my feature"  # Husky runs prettier + eslint --fix on staged files
-   ```
+interface CardProps extends React.HTMLAttributes<HTMLDivElement> {}
 
-4. **Push and PR:**
-   ```bash
-   git push -u origin feature/my-feature
-   ```
-   GitHub Actions CI will run automatically.
+export function Card({ className, ...props }: CardProps) {
+  return <div className={cn('border rounded-lg p-4', className)} {...props} />
+}
+```
+
+**Add an API endpoint:**
+
+```ts
+// app/api/todos/route.ts
+import { NextRequest, NextResponse } from 'next/server'
+import { auth } from '@/lib/auth/config'
+
+export async function GET(req: NextRequest) {
+  const session = await auth()
+  if (!session) return new NextResponse('Unauthorized', { status: 401 })
+
+  const todos = await db.todo.findMany()
+  return NextResponse.json(todos)
+}
+```
+
+**Create a feature:**
+
+```
+features/dashboard/
+├── components/
+│   ├── DashboardHeader.tsx
+│   └── StatsCard.tsx
+├── hooks/
+│   └── use-dashboard.ts
+├── types/
+│   └── dashboard.types.ts
+└── index.ts
+```
+
+**Write tests:**
+
+```tsx
+// tests/unit/lib/format.test.ts
+describe('formatDate', () => {
+  it('handles date strings', () => {
+    expect(formatDate('2024-01-15')).toBe('Jan 15, 2024')
+  })
+})
+
+// tests/integration/features/auth/LoginForm.test.tsx
+it('renders login buttons', () => {
+  render(<LoginForm />)
+  expect(screen.getByText(/github/i)).toBeDefined()
+})
+```
+
+### Git Workflow
+
+```bash
+git checkout -b feature/my-feature
+# Make changes, add tests
+git add .
+git commit -m "feat: description"
+# Pre-commit hook runs:
+#   - prettier --write (auto-format)
+#   - eslint --fix (auto-fix linting)
+# Push and open PR
+git push -u origin feature/my-feature
+# GitHub Actions CI runs: lint → type-check → test → build
+```
+
+---
+
+## Available npm Scripts
+
+### Development
+
+```bash
+npm run dev             # Start dev server (hot reload on :3000)
+npm run build           # Production build
+npm start               # Run production server (requires npm run build)
+```
+
+### Code Quality
+
+```bash
+npm run lint            # ESLint + Prettier check
+npm run format          # Auto-format with Prettier
+npm run type-check      # TypeScript type validation
+```
+
+### Testing
+
+```bash
+npm test                # Run all tests (vitest run)
+npm run test:watch      # Watch mode (re-run on file change)
+npm run test:coverage   # Run with coverage report
+```
 
 ---
 
@@ -504,24 +523,83 @@ npm run dev               # Start dev server
 ### Vercel (Recommended)
 
 ```bash
-# Vercel auto-detects Next.js; just push to GitHub
-git push origin main  # GitHub Actions runs; Vercel deploys on merge
+git push origin main
+# GitHub Actions runs tests
+# Vercel auto-deploys on successful merge
 ```
 
-### Docker / Self-Hosted
+### Self-Hosted / Docker
 
 ```bash
 # Build image
-docker build -t my-app .
+docker build -t myapp .
 
-# Run locally
-docker run -p 3000:3000 -e AUTH_SECRET=my-secret my-app
+# Run with environment
+docker run -p 3000:3000 \
+  -e NODE_ENV=production \
+  -e AUTH_SECRET=my-secret \
+  myapp
 
-# Or with compose
+# Or with docker-compose
 docker-compose up
 ```
 
-The Dockerfile uses a multi-stage build with `output: 'standalone'` for minimal, production-ready images.
+### Environment Variables
+
+```bash
+# .env.local (NEVER commit this)
+AUTH_SECRET=generated-automatically
+GITHUB_ID=your-github-oauth-id
+GITHUB_SECRET=your-github-oauth-secret
+NEXT_PUBLIC_API_URL=https://api.example.com
+```
+
+---
+
+## Architecture Principles (SOLID)
+
+### S — Single Responsibility
+
+Each file/component does one thing:
+- `components/Header.tsx` → renders header
+- `lib/api/client.ts` → handles HTTP requests
+- `features/auth/hooks/use-auth.ts` → auth logic
+
+### O — Open/Closed
+
+Extend components via props/variants, don't modify:
+```tsx
+<Button variant="outline" size="sm">  // Extend via props
+<LoadingSpinner size="lg" />            // Compose, don't modify
+```
+
+### L — Liskov Substitution
+
+Props match expected interfaces:
+```ts
+interface Props { title: string; onClick?: () => void }
+// Any component accepting Props can substitute another
+```
+
+### I — Interface Segregation
+
+Separate interfaces for different concerns:
+```ts
+interface User { id: string; name: string; email: string }
+interface ApiResponse<T> { data: T; success: boolean }
+// Components depend on what they need, not everything
+```
+
+### D — Dependency Inversion
+
+Depend on abstractions (hooks, APIs), not implementations:
+```ts
+// Good: depends on hook abstraction
+const { todos } = useTodos()
+
+// Bad: directly calls fetch
+const todos = await fetch('/api/todos').then(r => r.json())
+```
 
 ---
 
@@ -530,82 +608,65 @@ The Dockerfile uses a multi-stage build with `output: 'standalone'` for minimal,
 ### Add a shadcn/ui Component
 
 ```bash
-npx shadcn-ui@latest add button  # Adds Button to components/ui/button.tsx
+npx shadcn@latest add button
+# Creates: components/ui/button.tsx
 ```
 
-Then use:
-
-```tsx
-import { Button } from '@/components/ui/button'
-
-export function MyComponent() {
-  return <Button variant="outline">Click me</Button>
-}
-```
-
-### Add Authentication Providers
-
-Edit `lib/auth.ts`:
+### Add an Auth Provider
 
 ```ts
+// lib/auth/config.ts
 import GitHub from 'next-auth/providers/github'
 import Google from 'next-auth/providers/google'
 
 export const { ... } = NextAuth({
   providers: [
-    GitHub({ clientId: process.env.GITHUB_ID, clientSecret: process.env.GITHUB_SECRET }),
-    Google({ clientId: process.env.GOOGLE_ID, clientSecret: process.env.GOOGLE_SECRET }),
+    GitHub({
+      clientId: process.env.GITHUB_ID!,
+      clientSecret: process.env.GITHUB_SECRET!,
+    }),
+    Google({...}),
   ],
-  ...
 })
 ```
 
-Add env vars to `.env.local`:
+### Create a Feature Module
 
-```env
-GITHUB_ID=...
-GITHUB_SECRET=...
-GOOGLE_ID=...
-GOOGLE_SECRET=...
-```
+1. Create `features/my-feature/` directory
+2. Add subdirs: `components/`, `hooks/`, `types/`
+3. Create `index.ts` barrel export
+4. Add corresponding tests in `tests/integration/features/my-feature/`
 
-### Add a New API Route
-
-Create `app/api/todos/route.ts`:
+### Add a Custom Hook
 
 ```ts
-import { NextRequest, NextResponse } from 'next/server'
-
-export async function GET(req: NextRequest) {
-  const todos = await db.todos.findAll()
-  return NextResponse.json(todos)
+// lib/hooks/use-fetch.ts
+export function useFetch<T>(url: string) {
+  const [data, setData] = useState<T | null>(null)
+  useEffect(() => {
+    fetch(url).then(r => r.json()).then(setData)
+  }, [url])
+  return data
 }
 
-export async function POST(req: NextRequest) {
-  const body = await req.json()
-  const todo = await db.todos.create(body)
-  return NextResponse.json(todo, { status: 201 })
-}
+// Usage:
+const data = useFetch<Todo[]>('/api/todos')
 ```
 
-### Write a Test
-
-Create `tests/components/button.test.tsx`:
+### Write an Integration Test
 
 ```tsx
+// tests/integration/components/common/Button.test.tsx
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, it, expect } from 'vitest'
 import { Button } from '@/components/ui/button'
 
 describe('Button', () => {
-  it('renders and responds to clicks', async () => {
+  it('calls onClick when clicked', async () => {
     const handleClick = vi.fn()
     render(<Button onClick={handleClick}>Click me</Button>)
 
-    const button = screen.getByText('Click me')
-    await userEvent.click(button)
-
+    await userEvent.click(screen.getByText('Click me'))
     expect(handleClick).toHaveBeenCalledOnce()
   })
 })
@@ -618,54 +679,45 @@ describe('Button', () => {
 ### Port 3000 Already in Use
 
 ```bash
-# macOS/Linux
-lsof -i :3000  # Find process
-kill -9 <PID>  # Kill it
-
-# Or use different port
+lsof -i :3000          # Find process
+kill -9 <PID>          # Kill it
+# Or use a different port:
 npm run dev -- -p 3001
 ```
 
-### TypeScript Errors After Changes
+### TypeScript Errors
 
 ```bash
-npm run type-check  # Detailed error report
+npm run type-check
+# Shows detailed type errors; fix issues one by one
 ```
 
-### Test Failures
+### Tests Failing
 
 ```bash
-npm run test:watch  # Interactive test runner
-npm test -- --reporter=verbose  # Detailed output
+npm run test:watch
+# Re-run in watch mode, easier to debug
+# Check MSW handlers in tests/fixtures/handlers.ts
 ```
 
 ### Docker Build Fails
 
 ```bash
-docker build --progress=plain -t my-app .  # See full build log
+docker build --progress=plain -t myapp .
+# See full build output, easier to diagnose
 ```
 
 ---
 
-## Next Steps After Project Creation
+## Resources
 
-1. **Customize `lib/store.ts`** — Add your app's state slices
-2. **Create API routes** in `app/api/` for backend logic
-3. **Add shadcn/ui components** as needed
-4. **Set up authentication** providers in `lib/auth.ts`
-5. **Write tests** in `tests/` for core features
-6. **Deploy** to Vercel or Docker
-7. **Run `claude init`** to generate `CLAUDE.md` for AI pair programming
+- **[Next.js 15 Docs](https://nextjs.org/docs)**
+- **[TanStack Query](https://tanstack.com/query/latest/docs)**
+- **[Zustand](https://github.com/pmndrs/zustand)**
+- **[shadcn/ui](https://ui.shadcn.com)**
+- **[Auth.js](https://authjs.dev)**
+- **[Vitest](https://vitest.dev)**
+- **[Tailwind CSS](https://tailwindcss.com)**
+- **[React Testing Library](https://testing-library.com/react)**
+- **[Mock Service Worker](https://mswjs.io)**
 
----
-
-## References
-
-- [Next.js Documentation](https://nextjs.org/docs)
-- [Tailwind CSS Documentation](https://tailwindcss.com/docs)
-- [shadcn/ui Component Library](https://ui.shadcn.com/)
-- [Zustand Documentation](https://github.com/pmndrs/zustand)
-- [TanStack Query Documentation](https://tanstack.com/query/latest)
-- [Auth.js Documentation](https://authjs.dev/)
-- [Vitest Documentation](https://vitest.dev/)
-- [React Testing Library Documentation](https://testing-library.com/react)
