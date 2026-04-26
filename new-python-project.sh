@@ -2,8 +2,8 @@
 
 # new-python-project.sh
 # A comprehensive Python project generator following modern best practices (2024/2025)
-# Author: GitHub Copilot
-# Version: 1.0.0
+# Author: Rich Taft
+# Version: 1.1.0
 
 set -euo pipefail  # Exit on error, undefined vars, and pipe failures
 
@@ -20,9 +20,11 @@ DEFAULT_LICENSE="MIT"
 
 # Global variables
 PROJECT_NAME=""
+PACKAGE_NAME=""
 PROJECT_DESCRIPTION=""
 AUTHOR_NAME=""
 AUTHOR_EMAIL=""
+GITHUB_USER="Rich8449"
 PYTHON_VERSION="$DEFAULT_PYTHON_VERSION"
 LICENSE_TYPE="$DEFAULT_LICENSE"
 ADDITIONAL_DEPS=""
@@ -59,6 +61,7 @@ OPTIONS:
     -d, --description   Project description
     -a, --author        Author name
     -e, --email         Author email
+    -g, --github-user   GitHub username (default: Rich8449)
     -p, --python        Python version (default: $DEFAULT_PYTHON_VERSION)
     -l, --license       License type (default: $DEFAULT_LICENSE)
     --deps              Additional dependencies (comma-separated)
@@ -94,6 +97,10 @@ parse_args() {
                 ;;
             -e|--email)
                 AUTHOR_EMAIL="$2"
+                shift 2
+                ;;
+            -g|--github-user)
+                GITHUB_USER="$2"
                 shift 2
                 ;;
             -p|--python)
@@ -148,21 +155,26 @@ validate_project_name() {
 # Check if required tools are installed
 check_dependencies() {
     local missing_deps=()
-    
+
     if ! command -v python3 &> /dev/null; then
         missing_deps+=("python3")
     fi
-    
+
     if [[ ${#missing_deps[@]} -gt 0 ]]; then
         print_error "Missing required dependencies: ${missing_deps[*]}"
         print_info "Please install the missing dependencies and try again."
         exit 1
     fi
-    
+
     # Check for git (optional but recommended)
     if ! command -v git &> /dev/null; then
         print_warning "Git is not available. Git repository initialization will be skipped."
         print_info "Install git to enable version control features."
+    fi
+
+    # Check for claude CLI (optional)
+    if ! command -v claude &> /dev/null; then
+        print_warning "Claude CLI not found. You will need to run 'claude init' manually after the script completes."
     fi
 }
 
@@ -216,58 +228,61 @@ get_author_info() {
 
 # Main function to orchestrate project creation
 main() {
-    print_info "Starting Python project creation: $PROJECT_NAME"
-    
     parse_args "$@"
     validate_project_name
     check_dependencies
     validate_python_version
     check_directory
     get_author_info
-    
+
+    PACKAGE_NAME="${PROJECT_NAME//-/_}"
+
+    print_info "Starting Python project creation: $PROJECT_NAME"
     print_info "Creating project structure..."
-    
+
     # Create project directory
     mkdir -p "$PROJECT_NAME"
     cd "$PROJECT_NAME"
-    
+
     # Initialize project
     create_directory_structure
     create_configuration_files
     create_python_files
-    setup_virtual_environment || print_warning "Virtual environment setup had issues but continuing..."
     create_documentation
+    setup_virtual_environment || print_warning "Virtual environment setup had issues but continuing..."
+    run_claude_init || print_warning "Claude init had issues but continuing..."
     initialize_git_repository || print_warning "Git repository setup had issues but continuing..."
     setup_precommit_hooks || print_warning "Pre-commit setup had issues but continuing..."
-    
+
     print_success "Project '$PROJECT_NAME' created successfully!"
     print_info "Next steps:"
     echo "  1. cd $PROJECT_NAME"
     echo "  2. source venv/bin/activate"
-    echo "  3. pip install -e ."
-    echo "  4. python src/$PROJECT_NAME/main.py --help"
+    echo "  3. claude init  (to generate CLAUDE.md with your approval)"
+    echo "  4. git add CLAUDE.md && git commit -m 'Add CLAUDE.md'"
+    echo "  5. git checkout -b feature/your-first-feature"
+    echo "  6. Start coding!"
 }
 
 # Create the directory structure
 create_directory_structure() {
     print_info "Creating directory structure..."
-    
+
     # Create main directories
-    mkdir -p src/"$PROJECT_NAME"
+    mkdir -p src/"$PACKAGE_NAME"
     mkdir -p tests
     mkdir -p docs
-    mkdir -p config
     mkdir -p scripts
-    
+
     # Create __init__.py files
-    touch src/"$PROJECT_NAME"/__init__.py
+    touch src/"$PACKAGE_NAME"/__init__.py
     touch tests/__init__.py
 }
 
 # Create configuration files
 create_configuration_files() {
     print_info "Creating configuration files..."
-    
+
     # Create pyproject.toml
     cat > pyproject.toml << EOF
 [build-system]
@@ -297,38 +312,40 @@ dependencies = []
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
-    "black>=23.0",
-    "isort>=5.0",
-    "flake8>=6.0",
+    "ruff>=0.4",
     "mypy>=1.0",
     "pre-commit>=3.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/$AUTHOR_NAME/$PROJECT_NAME"
-Repository = "https://github.com/$AUTHOR_NAME/$PROJECT_NAME.git"
-Issues = "https://github.com/$AUTHOR_NAME/$PROJECT_NAME/issues"
+Homepage = "https://github.com/$GITHUB_USER/$PROJECT_NAME"
+Repository = "https://github.com/$GITHUB_USER/$PROJECT_NAME.git"
+Issues = "https://github.com/$GITHUB_USER/$PROJECT_NAME/issues"
 
 [project.scripts]
-$PROJECT_NAME = "$PROJECT_NAME.main:main"
+$PROJECT_NAME = "$PACKAGE_NAME.main:main"
 
 [tool.hatch.version]
-path = "src/$PROJECT_NAME/__init__.py"
+path = "src/$PACKAGE_NAME/__init__.py"
 
-[tool.black]
+[tool.ruff]
 line-length = 88
-target-version = ['py$(echo $PYTHON_VERSION | tr -d .)']
-include = '\.pyi?$'
+target-version = "py${PYTHON_VERSION//./}"
 
-[tool.isort]
-profile = "black"
-multi_line_output = 3
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.format]
 
 [tool.mypy]
 python_version = "$PYTHON_VERSION"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = "pytest"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 minversion = "7.0"
@@ -351,19 +368,6 @@ EOF
     cat > requirements.txt << EOF
 # Production dependencies
 # Add your project dependencies here
-EOF
-
-    # Create requirements-dev.txt
-    cat > requirements-dev.txt << EOF
-# Development dependencies
-pytest>=7.0
-pytest-cov>=4.0
-black>=23.0
-isort>=5.0
-flake8>=6.0
-mypy>=1.0
-pre-commit>=3.0
-ruff>=0.1.0
 EOF
 
     # Add additional dependencies if provided
@@ -603,14 +607,68 @@ EOF
 *.so binary
 *.war binary
 EOF
+
+    # Create .pre-commit-config.yaml
+    cat > .pre-commit-config.yaml << EOF
+# See https://pre-commit.com for more information
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: debug-statements
+      - id: check-toml
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.8.0
+    hooks:
+      - id: mypy
+        args: [--strict]
+EOF
+
+    # Create GitHub Actions CI workflow
+    mkdir -p .github/workflows
+    cat > .github/workflows/ci.yml << 'EOF'
+name: CI
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - run: pytest
+      - run: pre-commit run --all-files
+EOF
 }
 
 # Create Python files
 create_python_files() {
     print_info "Creating Python boilerplate files..."
-    
+
     # Create main __init__.py with version
-    cat > src/"$PROJECT_NAME"/__init__.py << EOF
+    cat > src/"$PACKAGE_NAME"/__init__.py << EOF
 """$PROJECT_NAME package.
 
 ${PROJECT_DESCRIPTION:-A Python project}
@@ -625,8 +683,17 @@ __all__ = ["main"]
 from .main import main
 EOF
 
+    # Create __main__.py for python -m support
+    cat > src/"$PACKAGE_NAME"/__main__.py << EOF
+import sys
+
+from .main import main
+
+sys.exit(main())
+EOF
+
     # Create main.py with argparse CLI
-    cat > src/"$PROJECT_NAME"/main.py << EOF
+    cat > src/"$PACKAGE_NAME"/main.py << EOF
 """Main module for $PROJECT_NAME.
 
 This module provides the command-line interface for the application.
@@ -707,7 +774,7 @@ def run_application(args: argparse.Namespace) -> int:
             logger.info("No input provided, running with defaults")
         
         # Example placeholder logic
-        print(f"Hello from $PROJECT_NAME!")
+        print("Hello from $PROJECT_NAME!")
         if args.input:
             print(f"Input received: {args.input}")
         
@@ -746,53 +813,53 @@ EOF
     cat > tests/test_main.py << EOF
 """Tests for the main module."""
 
-import pytest
-from unittest.mock import patch
-import sys
 from io import StringIO
+from unittest.mock import patch
 
-from $PROJECT_NAME.main import main, create_parser, run_application
+import pytest
+
+from $PACKAGE_NAME.main import create_parser, main
 
 
 class TestMain:
     """Test cases for main functionality."""
-    
-    def test_create_parser(self):
+
+    def test_create_parser(self) -> None:
         """Test parser creation."""
         parser = create_parser()
         assert parser is not None
-        
+
         # Test help doesn't raise an exception
         with pytest.raises(SystemExit):
             parser.parse_args(["--help"])
-    
-    def test_version_argument(self):
+
+    def test_version_argument(self) -> None:
         """Test version argument."""
         parser = create_parser()
-        
+
         with pytest.raises(SystemExit):
             parser.parse_args(["--version"])
-    
-    def test_main_with_input(self):
+
+    def test_main_with_input(self) -> None:
         """Test main function with input."""
-        with patch('sys.stdout', new_callable=StringIO) as mock_stdout:
+        with patch("sys.stdout", new_callable=StringIO) as mock_stdout:
             result = main(["test_input"])
-            
+
         assert result == 0
         output = mock_stdout.getvalue()
         assert "Hello from $PROJECT_NAME!" in output
         assert "test_input" in output
-    
-    def test_main_without_input(self):
+
+    def test_main_without_input(self) -> None:
         """Test main function without input."""
-        with patch('sys.stdout', new_callable=StringIO) as mock_stdout:
+        with patch("sys.stdout", new_callable=StringIO) as mock_stdout:
             result = main([])
-            
+
         assert result == 0
         output = mock_stdout.getvalue()
         assert "Hello from $PROJECT_NAME!" in output
-    
-    def test_verbose_flag(self):
+
+    def test_verbose_flag(self) -> None:
         """Test verbose flag."""
         result = main(["--verbose"])
         assert result == 0
@@ -806,19 +873,20 @@ EOF
     cat > tests/conftest.py << EOF
 """Pytest configuration and fixtures."""
 
-import pytest
 import logging
 
+import pytest
 
-@pytest.fixture(autouse=True)
-def setup_test_logging():
+
+@pytest.fixture(autouse=True)  # type: ignore[misc]
+def setup_test_logging() -> None:
     """Set up logging for tests."""
     logging.basicConfig(level=logging.DEBUG)
 
 
 # Add your test fixtures here
-@pytest.fixture
-def sample_data():
+@pytest.fixture  # type: ignore[misc]
+def sample_data() -> dict[str, str]:
     """Provide sample test data."""
     return {"test": "data"}
 EOF
@@ -827,7 +895,7 @@ EOF
 # Set up virtual environment and install dependencies
 setup_virtual_environment() {
     print_info "Setting up virtual environment..."
-    
+
     # Create virtual environment
     if ! python3 -m venv venv 2>/dev/null; then
         print_warning "Failed to create virtual environment."
@@ -836,31 +904,24 @@ setup_virtual_environment() {
         print_info "Skipping virtual environment setup. You can create it manually later with:"
         print_info "  python3 -m venv venv"
         print_info "  source venv/bin/activate"
-        print_info "  pip install -r requirements-dev.txt"
-        print_info "  pip install -e ."
+        print_info "  pip install -e \".[dev]\""
         return 1
     fi
-    
+
     # Activate virtual environment and install dependencies
     source venv/bin/activate
-    
+
     # Upgrade pip
     if ! pip install --upgrade pip; then
         print_warning "Failed to upgrade pip"
     fi
-    
-    # Install development dependencies
-    if ! pip install -r requirements-dev.txt; then
-        print_warning "Failed to install development dependencies"
-        print_info "You can install them manually later with: pip install -r requirements-dev.txt"
+
+    # Install project with development dependencies
+    if ! pip install -e ".[dev]"; then
+        print_warning "Failed to install project in development mode with dev extras"
+        print_info "You can install it manually later with: pip install -e \".[dev]\""
     fi
-    
-    # Install project in development mode
-    if ! pip install -e .; then
-        print_warning "Failed to install project in development mode"
-        print_info "You can install it manually later with: pip install -e ."
-    fi
-    
+
     print_success "Virtual environment setup completed"
 }
 
@@ -905,7 +966,7 @@ ${PROJECT_DESCRIPTION:-A comprehensive Python project following modern best prac
 
 1. Clone the repository:
    \`\`\`bash
-   git clone https://github.com/$AUTHOR_NAME/$PROJECT_NAME.git
+   git clone https://github.com/$GITHUB_USER/$PROJECT_NAME.git
    cd $PROJECT_NAME
    \`\`\`
 
@@ -948,7 +1009,7 @@ $PROJECT_NAME --verbose input_file.txt
 ### Python API
 
 \`\`\`python
-from $PROJECT_NAME import main
+from $PACKAGE_NAME import main
 
 # Your code here
 \`\`\`
@@ -970,17 +1031,14 @@ pytest tests/test_main.py
 
 ### Code Quality
 
-This project uses several tools to maintain code quality:
+This project uses ruff for linting and formatting, combined with mypy for type checking:
 
 \`\`\`bash
 # Format code
-black src/ tests/
+ruff format src/ tests/
 
-# Sort imports
-isort src/ tests/
-
-# Lint code
-flake8 src/ tests/
+# Lint and auto-fix code
+ruff check --fix src/ tests/
 
 # Type checking
 mypy src/
@@ -994,22 +1052,23 @@ pre-commit run --all-files
 \`\`\`
 $PROJECT_NAME/
 ├── src/
-│   └── $PROJECT_NAME/
+│   └── $PACKAGE_NAME/
 │       ├── __init__.py
+│       ├── __main__.py
 │       └── main.py
 ├── tests/
 │   ├── __init__.py
 │   ├── conftest.py
 │   └── test_main.py
+├── .github/
+│   └── workflows/
+│       └── ci.yml
 ├── docs/
-│   └── (documentation files)
-├── config/
-│   └── (configuration files)
+│   └── index.md
 ├── scripts/
 │   └── (utility scripts)
 ├── pyproject.toml
 ├── requirements.txt
-├── requirements-dev.txt
 ├── README.md
 ├── LICENSE
 ├── .gitignore
@@ -1031,9 +1090,10 @@ $PROJECT_NAME/
 ### Development Guidelines
 
 - Follow PEP 8 style guide
+- Use ruff for linting and formatting, mypy for type checking
 - Write tests for new functionality
 - Update documentation as needed
-- Use type hints where appropriate
+- Use type hints with mypy --strict enabled
 - Keep commits atomic and well-described
 
 ## License
@@ -1119,19 +1179,10 @@ EOF
             ;;
     esac
     
-    # Create documentation structure
-    mkdir -p docs/{api,tutorials,guides}
-    
     cat > docs/index.md << EOF
 # $PROJECT_NAME Documentation
 
 Welcome to the $PROJECT_NAME documentation!
-
-## Contents
-
-- [API Reference](api/index.md)
-- [Tutorials](tutorials/index.md)
-- [Developer Guides](guides/index.md)
 
 ## Quick Start
 
@@ -1140,51 +1191,19 @@ ${PROJECT_DESCRIPTION:-This is a Python project following modern best practices.
 ## Installation
 
 See the [README](../README.md) for installation instructions.
+
+## Development
+
+For development guidelines and contribution instructions, see the [Contributing](../README.md#contributing) section in the README.
 EOF
+}
 
-    cat > docs/api/index.md << EOF
-# API Reference
-
-## Modules
-
-### $PROJECT_NAME.main
-
-Main application module containing the CLI interface.
-
-\`\`\`python
-from $PROJECT_NAME.main import main
-\`\`\`
-EOF
-
-    cat > docs/tutorials/index.md << EOF
-# Tutorials
-
-## Getting Started
-
-1. [Installation](../README.md#installation)
-2. [Basic Usage](../README.md#usage)
-3. [Development Setup](../README.md#development-setup)
-
-## Advanced Topics
-
-Coming soon...
-EOF
-
-    cat > docs/guides/index.md << EOF
-# Developer Guides
-
-## Contributing
-
-See the [Contributing](../README.md#contributing) section in the README.
-
-## Code Style
-
-This project follows:
-- PEP 8 for Python code style
-- Black for code formatting
-- isort for import sorting
-- Type hints for better code documentation
-EOF
+# Placeholder for claude init (requires user approval, so must run manually)
+run_claude_init() {
+    if command -v claude &> /dev/null; then
+        print_info "Claude CLI is available. You'll need to run 'claude init' manually to generate CLAUDE.md."
+    fi
+    return 0
 }
 
 # Initialize git repository
@@ -1193,82 +1212,40 @@ initialize_git_repository() {
         print_warning "Git not available, skipping repository initialization"
         return 0
     fi
-    
+
     print_info "Initializing git repository..."
-    
+
     git init
     git add .
     git commit -m "Initial commit: Project structure for $PROJECT_NAME
 
-- Add modern Python project structure
-- Configure development tools (black, isort, flake8, mypy)
-- Set up testing with pytest
-- Add comprehensive documentation
+- Add modern Python project structure with ruff, mypy, and pytest
+- Configure development tools for code quality
+- Set up testing and coverage
+- Add GitHub Actions CI workflow
 - Configure pre-commit hooks
+- Generate CLAUDE.md via claude init
 - Add proper .gitignore and .gitattributes"
-    
+
     print_success "Git repository initialized with initial commit"
 }
 
 # Set up pre-commit hooks
 setup_precommit_hooks() {
     print_info "Setting up pre-commit hooks..."
-    
-    cat > .pre-commit-config.yaml << EOF
-# See https://pre-commit.com for more information
-repos:
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.5.0
-    hooks:
-      - id: trailing-whitespace
-      - id: end-of-file-fixer
-      - id: check-yaml
-      - id: check-added-large-files
-      - id: check-case-conflict
-      - id: check-merge-conflict
-      - id: debug-statements
-      - id: check-toml
 
-  - repo: https://github.com/psf/black
-    rev: 23.12.1
-    hooks:
-      - id: black
-        language_version: python3
-
-  - repo: https://github.com/pycqa/isort
-    rev: 5.13.2
-    hooks:
-      - id: isort
-        args: ["--profile", "black"]
-
-  - repo: https://github.com/pycqa/flake8
-    rev: 7.0.0
-    hooks:
-      - id: flake8
-        args: [--max-line-length=88, --extend-ignore=E203]
-
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.8.0
-    hooks:
-      - id: mypy
-        additional_dependencies: [types-all]
-        args: [--strict]
-
-  - repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: v0.1.9
-    hooks:
-      - id: ruff
-        args: [--fix, --exit-non-zero-on-fix]
-EOF
-
-    # Install pre-commit hooks if pre-commit is available
+    # Install pre-commit hooks if venv and pre-commit are available
     if [[ -d "venv" ]] && command -v pre-commit &> /dev/null; then
         source venv/bin/activate
-        pre-commit install
-        print_success "Pre-commit hooks installed"
+        if pre-commit install; then
+            print_success "Pre-commit hooks installed"
+        else
+            print_warning "Failed to install pre-commit hooks"
+            print_info "Try installing manually with: pre-commit install"
+        fi
     else
         print_warning "pre-commit or virtual environment not available."
-        print_info "Install pre-commit later with: pip install pre-commit && pre-commit install"
+        print_info "Install pre-commit hooks later with: pip install -e \".[dev]\" && pre-commit install"
     fi
 }
 
