@@ -57,7 +57,7 @@ I've successfully created a comprehensive shell script that generates modern Pyt
 
 ✅ **Development Environment**
 - Virtual environment setup (with graceful fallback)
-- Essential development tools (pytest, black, flake8, mypy, isort)
+- Essential development tools (pytest, black, flake8, mypy, isort, ruff)
 - Pre-commit hooks configuration
 
 ✅ **Documentation**
@@ -72,6 +72,9 @@ I've successfully created a comprehensive shell script that generates modern Pyt
 
 ✅ **Script Features**
 - Command-line parameter support for customization
+- `--dry-run` mode prints a summary of what would be created without writing any files
+- `--verbose` flag enables `set -x` shell tracing for debugging
+- Author name/email resolved from git config, falling back to hardcoded defaults (`Rich.Taft` / `Rich8449@gmail.com`)
 - Comprehensive error handling and validation
 - Graceful fallbacks for missing dependencies
 - Informative output and help system
@@ -81,7 +84,7 @@ I've successfully created a comprehensive shell script that generates modern Pyt
 
 ```bash
 # Basic usage
-./new-python-project.sh my-awesome-project
+./new-python-project.sh my_awesome_project
 
 # Full customization
 ./new-python-project.sh \
@@ -91,16 +94,24 @@ I've successfully created a comprehensive shell script that generates modern Pyt
   --python 3.12 \
   --license Apache-2.0 \
   --deps "requests,fastapi,pydantic" \
-  my-api-project
+  my_api_project
 
-# Force overwrite existing directory
-./new-python-project.sh -f existing-project
+# Preview what would be created without writing any files
+./new-python-project.sh --dry-run my_project
+
+# Enable verbose shell tracing
+./new-python-project.sh --verbose my_project
+
+# Force overwrite existing directory (original is backed up with a timestamp)
+./new-python-project.sh -f existing_project
 ```
+
+> **Note:** Project names must start with a letter and contain only letters, numbers, and underscores. Hyphens are not allowed because they produce invalid Python package names.
 
 ### **Generated Project Structure**
 ```
-your-project/
-├── src/your-project/
+your_project/
+├── src/your_project/
 │   ├── __init__.py (with version info)
 │   └── main.py (CLI with argparse)
 ├── tests/
@@ -126,11 +137,12 @@ your-project/
 ```
 
 ### **Robust Error Handling**
-- ✅ Validates project names and parameters
+- ✅ Validates project names (letters, numbers, underscores only — no hyphens)
 - ✅ Checks Python version compatibility
 - ✅ Gracefully handles missing `git` or `python3-venv`
 - ✅ Provides clear instructions for manual setup when needed
 - ✅ Continues project creation even if some components fail
+- ✅ `--force` backs up existing directory to `<name>.bak.YYYYMMDD_HHMMSS` instead of deleting it
 
 The script is production-ready and follows modern Python development best practices. It creates a professional project structure that's ready for development, testing, and deployment.
 
