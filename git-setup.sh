@@ -59,7 +59,7 @@ run_cmd() {
     printf '[DRY-RUN] %s\n' "$*"
   else
     log "RUN: $*"
-    eval "$@"
+    "$@"
   fi
 }
 
@@ -151,7 +151,7 @@ generate_ssh_key() {
     [ -f "$pub" ] && run_cmd mv "$pub" "$backup_pub"
   fi
 
-  mkdir -p "$(dirname "$KEY_PATH")"
+  run_cmd mkdir -p "$(dirname "$KEY_PATH")"
   if [ "$DRY_RUN" -eq 1 ]; then
     info "(dry-run) Would generate SSH key: type=$KEY_TYPE path=$KEY_PATH"
     return 0
@@ -205,7 +205,7 @@ copy_pubkey_to_clipboard_or_print() {
 
 open_github_keys_page() {
   url="https://github.com/settings/keys"
-  if command -v xdg-open >/dev/null 2>&1 && [ "$DISPLAY" != "" ] 2>/dev/null || command -v xdg-open >/dev/null 2>&1; then
+  if command -v xdg-open >/dev/null 2>&1 && [ -n "${DISPLAY:-}" ]; then
     info "Opening GitHub SSH keys page in default browser"
     run_cmd xdg-open "$url" || info "Could not open browser; URL: $url"
   else
@@ -234,11 +234,13 @@ test_ssh_to_github() {
     info "(dry-run) Would run: ssh -T git@github.com"
     return 0
   fi
-  if ssh -T git@github.com 2>&1 | grep -q "successfully authenticated" || ssh -T git@github.com 2>&1 | grep -q "authenticated"; then
+  output=$(ssh -T git@github.com 2>&1)
+  info "$output"
+  if printf '%s' "$output" | grep -q "authenticated"; then
     info "SSH authentication worked (GitHub responded)."
     return 0
   else
-    info "SSH test finished. Output above may indicate success or failure."
+    info "SSH test failed or inconclusive."
     return 1
   fi
 }
