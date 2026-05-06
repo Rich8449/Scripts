@@ -29,6 +29,8 @@ PYTHON_VERSION="$DEFAULT_PYTHON_VERSION"
 LICENSE_TYPE="$DEFAULT_LICENSE"
 ADDITIONAL_DEPS=""
 FORCE_OVERWRITE=false
+DRY_RUN=false
+VERBOSE=false
 
 # Function to print colored output
 print_info() {
@@ -66,12 +68,14 @@ OPTIONS:
     -l, --license       License type (default: $DEFAULT_LICENSE)
     --deps              Additional dependencies (comma-separated)
     -f, --force         Force overwrite existing directory
+    --dry-run           Print what would be done without executing
+    --verbose           Enable verbose output (set -x)
     -h, --help          Show this help message
 
 EXAMPLES:
-    $0 my-awesome-project
-    $0 -d "My awesome Python app" -a "John Doe" -e "john@example.com" my-project
-    $0 --python 3.12 --license Apache-2.0 --deps "requests,fastapi" my-api
+    $0 my_awesome_project
+    $0 -d "My awesome Python app" -a "John Doe" -e "john@example.com" my_project
+    $0 --python 3.12 --license Apache-2.0 --deps "requests,fastapi" my_api
 
 SUPPORTED LICENSES:
     MIT, Apache-2.0, GPL-3.0, BSD-3-Clause, BSD-2-Clause
@@ -119,6 +123,14 @@ parse_args() {
                 FORCE_OVERWRITE=true
                 shift
                 ;;
+            --dry-run)
+                DRY_RUN=true
+                shift
+                ;;
+            --verbose)
+                VERBOSE=true
+                shift
+                ;;
             -*)
                 print_error "Unknown option: $1"
                 show_help
@@ -146,8 +158,8 @@ parse_args() {
 
 # Validate project name
 validate_project_name() {
-    if [[ ! "$PROJECT_NAME" =~ ^[a-zA-Z][a-zA-Z0-9_-]*$ ]]; then
-        print_error "Invalid project name. Must start with a letter and contain only letters, numbers, hyphens, and underscores."
+    if [[ ! "$PROJECT_NAME" =~ ^[a-zA-Z][a-zA-Z0-9_]*$ ]]; then
+        print_error "Invalid project name. Must start with a letter and contain only letters, numbers, and underscores."
         exit 1
     fi
 }
@@ -201,43 +213,66 @@ check_directory() {
             print_error "Directory '$PROJECT_NAME' already exists. Use -f/--force to overwrite."
             exit 1
         else
-            print_warning "Removing existing directory '$PROJECT_NAME'..."
-            rm -rf "$PROJECT_NAME"
+            local backup="${PROJECT_NAME}.bak.$(date +%Y%m%d_%H%M%S)"
+            print_warning "Backing up existing directory '$PROJECT_NAME' to '$backup'..."
+            mv "$PROJECT_NAME" "$backup"
         fi
     fi
 }
 
-# Get author information from git if not provided
+# Get author information from git if not provided, falling back to hardcoded defaults
 get_author_info() {
     if [[ -z "$AUTHOR_NAME" ]]; then
         AUTHOR_NAME=$(git config user.name 2>/dev/null || echo "")
     fi
-    
+
     if [[ -z "$AUTHOR_EMAIL" ]]; then
         AUTHOR_EMAIL=$(git config user.email 2>/dev/null || echo "")
     fi
-    
+
     if [[ -z "$AUTHOR_NAME" ]]; then
-        read -p "Enter author name: " AUTHOR_NAME
+        AUTHOR_NAME="Rich.Taft"
     fi
-    
+
     if [[ -z "$AUTHOR_EMAIL" ]]; then
-        read -p "Enter author email: " AUTHOR_EMAIL
+        AUTHOR_EMAIL="Rich8449@gmail.com"
     fi
 }
 
 # Main function to orchestrate project creation
 main() {
     parse_args "$@"
+
+    [[ "$VERBOSE" == true ]] && set -x
+
     validate_project_name
     check_dependencies
     validate_python_version
-    check_directory
     get_author_info
 
-    PACKAGE_NAME="${PROJECT_NAME//-/_}"
+    if [[ "$DRY_RUN" == true ]]; then
+        print_info "Dry run — no files will be created."
+        echo "  Project name:    $PROJECT_NAME"
+        echo "  Description:     ${PROJECT_DESCRIPTION:-(none)}"
+        echo "  Author:          $AUTHOR_NAME <$AUTHOR_EMAIL>"
+        echo "  Python version:  $PYTHON_VERSION"
+        echo "  License:         $LICENSE_TYPE"
+        echo "  Extra deps:      ${ADDITIONAL_DEPS:-(none)}"
+        echo "  Force overwrite: $FORCE_OVERWRITE"
+        echo ""
+        echo "  Steps that would run:"
+        echo "    1. Create directory: $PROJECT_NAME/"
+        echo "    2. Generate project structure and configuration files"
+        echo "    3. Generate Python boilerplate (src/$PROJECT_NAME/, tests/)"
+        echo "    4. Set up virtual environment and install dependencies"
+        echo "    5. Generate documentation (README.md, LICENSE, docs/)"
+        echo "    6. Initialize git repository with initial commit"
+        echo "    7. Install pre-commit hooks"
+        return 0
+    fi
 
     print_info "Starting Python project creation: $PROJECT_NAME"
+    check_directory
     print_info "Creating project structure..."
 
     # Create project directory
@@ -314,6 +349,7 @@ dev = [
     "pytest-cov>=4.0",
     "ruff>=0.4",
     "mypy>=1.0",
+    "ruff>=0.1.0",
     "pre-commit>=3.0",
 ]
 
@@ -608,7 +644,7 @@ EOF
 *.war binary
 EOF
 
-    # Create .pre-commit-config.yaml
+    # Create pre-commit configuration
     cat > .pre-commit-config.yaml << EOF
 # See https://pre-commit.com for more information
 repos:
@@ -624,42 +660,36 @@ repos:
       - id: debug-statements
       - id: check-toml
 
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.0
+  - repo: https://github.com/psf/black
+    rev: 23.12.1
     hooks:
-      - id: ruff
-        args: [--fix]
-      - id: ruff-format
+      - id: black
+        language_version: python3
+
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ["--profile", "black"]
+
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.0.0
+    hooks:
+      - id: flake8
+        args: [--max-line-length=88, --extend-ignore=E203]
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.8.0
     hooks:
       - id: mypy
+        additional_dependencies: [types-all]
         args: [--strict]
-EOF
 
-    # Create GitHub Actions CI workflow
-    mkdir -p .github/workflows
-    cat > .github/workflows/ci.yml << 'EOF'
-name: CI
-
-on:
-  push:
-    branches: [main, "feature/**"]
-  pull_request:
-    branches: [main]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: pip install -e ".[dev]"
-      - run: pytest
-      - run: pre-commit run --all-files
+  - repo: https://github.com/charliermarsh/ruff-pre-commit
+    rev: v0.1.9
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
 EOF
 }
 
@@ -1234,7 +1264,7 @@ initialize_git_repository() {
 setup_precommit_hooks() {
     print_info "Setting up pre-commit hooks..."
 
-    # Install pre-commit hooks if venv and pre-commit are available
+    # Install pre-commit hooks if pre-commit is available
     if [[ -d "venv" ]] && command -v pre-commit &> /dev/null; then
         source venv/bin/activate
         if pre-commit install; then

@@ -10,7 +10,7 @@ Flags to implement:
 --license SPDX (e.g., MIT, Apache-2.0; optional)
 --remote-name NAME (default: origin)
 --branch NAME (default: main)
---push (push the initial commit and set upstream)
+--push (push the initial commit and set upstream; default: do not push)
 --org ORGNAME (create repo under an organization)
 --force (overwrite local remote link or replace remote repo if explicitly requested)
 --dry-run (show actions but don't perform changes)
@@ -46,16 +46,17 @@ If repo already exists on GitHub:
 If --force and user confirms (or --non-interactive with --force), optionally delete+recreate (warn prominently), otherwise link to the existing remote and exit or prompt to rename.
 Remote linking, pushing, and verification
 
-Add remote git remote add <remote-name> <repo-ssh-or-https-url> (choose SSH if SSH keys exist and agent loaded, else HTTPS).
+Add remote git remote add <remote-name> <repo-ssh-or-https-url>. To choose the URL protocol: first check for at least one ~/.ssh/id_*.pub file; if found, run ssh -T git@github.com — exit code 1 means authenticated (use SSH), exit code 255 means no agent or key not registered (fall back to HTTPS). Log which protocol was selected and why.
 If --push requested, run git push --set-upstream <remote-name> <branch>.
 Validate push succeeded and print remote URL.
 Optionally run gh repo view <repo> or curl to verify repo metadata.
+If --open is specified, open the created repo in the browser after creation: prefer gh repo view --web <repo>; fall back to xdg-open (Linux) or open (macOS) on the HTTPS URL.
 UX, logging, and safety
 
 Implement --dry-run and --verbose.
 Provide clear help text and usage examples.
 Prompt before destructive operations (deleting remote repo), allow --force to skip prompts.
-Exit with non-zero codes for failures and return helpful error messages.
+Exit with non-zero codes for failures and return helpful error messages. Use the following exit codes: 1 = general error, 2 = missing dependency (git, gh, or curl), 3 = authentication failure, 4 = repo already exists and --force not specified, 5 = push failed.
 Keep the script idempotent by checking states before acting.
 Examples
 
@@ -69,6 +70,3 @@ A single executable script git-create-repo.sh with inline comments and a header 
 A short README snippet included at the top explaining how to set GITHUB_TOKEN or use gh auth.
 Minimal internal tests (optional): simple dry-run examples or assertions.
 Security note: instruct the implementer not to echo sensitive tokens and to prefer using the GitHub CLI or reading tokens from the environment. If using curl, recommend temporary environment variables and clearing them after use.
-
-C — Short one-liner (for quick generator tools)
-Generate a POSIX/Bash script git-create-repo.sh that sets git user.name="Rich.Taft" and user.email="Rich8449@gmail.com" if unset, initializes a local repo (README, .gitignore, LICENSE optional), creates the repo on GitHub using gh if present or the REST API via GITHUB_TOKEN, adds remote, pushes initial commit (optional), supports flags for name/description/private/gitignore/license/branch/push/force/dry-run/verbose/non-interactive, is idempotent, and prints instructions when interactive steps are needed.

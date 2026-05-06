@@ -1,406 +1,545 @@
 #!/usr/bin/env bash
-# git-create-repo.sh
-# POSIX-friendly Bash script to initialize a local git repository and create
-# the corresponding GitHub repository using `gh` when available or the
-# GitHub REST API (requires GITHUB_TOKEN). Safe, idempotent, with --dry-run
-# and --verbose modes. Defaults: user.name="Rich.Taft", user.email="Rich8449@gmail.com",
-# default branch "main".
+# git-create-repo.sh — Create a GitHub repository and link it to the current directory.
 #
-# Usage examples (see --help for full list):
-#  ./git-create-repo.sh --name mytool --description 'My tool' --push --gitignore Python --license MIT
-#  GITHUB_TOKEN=xxx ./git-create-repo.sh --name confidential --private --org myorg --push --non-interactive --force
+# Authentication:
+#   Preferred: GitHub CLI (gh) — run `gh auth login` if not authenticated.
+#   Fallback:  Set GITHUB_TOKEN env var with 'repo' scope.
+#              Create a token at: https://github.com/settings/tokens/new?scopes=repo
+#              Never hardcode tokens in this script or expose them in shell history.
+#
+# Usage:
+#   ./git-create-repo.sh [OPTIONS]
+#
+# Exit codes:
+#   0  success
+#   1  general error
+#   2  missing dependency (git, gh, or curl)
+#   3  authentication failure
+#   4  repo already exists and --force not specified
+#   5  push failed
 
-set -o errexit
-set -o pipefail
-set -o nounset
+set -euo pipefail
 
-# Defaults
-DEFAULT_NAME="Rich.Taft"
-DEFAULT_EMAIL="Rich8449@gmail.com"
-DEFAULT_BRANCH="main"
-DEFAULT_REMOTE_NAME="origin"
-DEFAULT_PRIVATE=1  # default private unless --public specified
+# ── Defaults ──────────────────────────────────────────────────────────────────
+readonly DEFAULT_USER_NAME="Rich.Taft"
+readonly DEFAULT_USER_EMAIL="Rich8449@gmail.com"
+readonly DEFAULT_BRANCH="main"
+readonly DEFAULT_REMOTE="origin"
 
-# State
+# ── State (overridden by flags) ───────────────────────────────────────────────
 REPO_NAME=""
 DESCRIPTION=""
-PRIVATE=$DEFAULT_PRIVATE
-GITIGNORE=""
-LICENSE=""
-REMOTE_NAME="$DEFAULT_REMOTE_NAME"
+VISIBILITY="private"
+GITIGNORE_TEMPLATE=""
+LICENSE_SPDX=""
+REMOTE_NAME="$DEFAULT_REMOTE"
 BRANCH="$DEFAULT_BRANCH"
-PUSH=0
+PUSH=false
 ORG=""
-FORCE=0
-DRY_RUN=0
-VERBOSE=0
-OPEN=0
-NON_INTERACTIVE=0
+FORCE=false
+DRY_RUN=false
+VERBOSE=false
+OPEN_BROWSER=false
+NON_INTERACTIVE=false
 
-print_help() {
-  cat <<EOF
-Usage: $(basename "$0") [options]
+AUTH_METHOD=""   # "gh" or "curl"
+REMOTE_URL=""
+REMOTE_PROTOCOL=""
 
-Options:
-  --name NAME            Repository name (default: basename of current directory)
-  --description TEXT     Repository description
-  --private              Create repository as private (default)
-  --public               Create repository as public
-  --gitignore TEMPLATE   Add a .gitignore from a template name (e.g. Python)
-  --license SPDX         Add a LICENSE file with SPDX id (e.g. MIT)
-  --remote-name NAME     Remote name to add (default: ${DEFAULT_REMOTE_NAME})
-  --branch NAME          Initial branch name (default: ${DEFAULT_BRANCH})
-  --push                 Push the initial commit and set upstream
-  --org ORGNAME          Create repository under an organization
-  --force                Overwrite/link even if remote/repo exists
-  --dry-run              Show actions but do not perform them
-  --verbose              Enable verbose logging
-  --open                 Open created repo in browser after creation
-  --non-interactive      Fail instead of prompting
-  -h, --help             Show this help
+# ── Logging ───────────────────────────────────────────────────────────────────
+log()     { echo "[git-create-repo] $*"; }
+info()    { $VERBOSE && echo "[verbose] $*" || true; }
+warn()    { echo "[warn] $*" >&2; }
+err()     { echo "[error] $*" >&2; }
 
-Environment:
-  This script prefers the GitHub CLI `gh` (no token required when `gh` is
-  authenticated). If `gh` is not available the script will open your browser
-  to the GitHub new-repository page so you can create the repository manually
-  and then paste the repository clone URL back into the script. This avoids
-  requiring a GITHUB_TOKEN in the script itself.
-
-This script attempts to be safe and idempotent. It will avoid destructive
-operations unless --force is provided. Use --dry-run to preview actions.
-EOF
-}
-
-log() { [ "$VERBOSE" -eq 1 ] && printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
-info() { printf '%s\n' "$*"; }
-err() { printf 'ERROR: %s\n' "$*" >&2; }
-
-run_cmd() {
-  if [ "$DRY_RUN" -eq 1 ]; then
-    printf '[DRY-RUN] %s\n' "$*"
-  else
-    log "RUN: $*"
-    eval "$@"
-  fi
-}
-
-require_cmd() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    err "required command '$1' not found"
-    return 1
-  fi
-}
-
-parse_args() {
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --name) REPO_NAME="$2"; shift 2;;
-      --description) DESCRIPTION="$2"; shift 2;;
-      --private) PRIVATE=1; shift 1;;
-      --public) PRIVATE=0; shift 1;;
-      --gitignore) GITIGNORE="$2"; shift 2;;
-      --license) LICENSE="$2"; shift 2;;
-      --remote-name) REMOTE_NAME="$2"; shift 2;;
-      --branch) BRANCH="$2"; shift 2;;
-      --push) PUSH=1; shift 1;;
-      --org) ORG="$2"; shift 2;;
-      --force) FORCE=1; shift 1;;
-      --dry-run) DRY_RUN=1; shift 1;;
-      --verbose) VERBOSE=1; shift 1;;
-      --open) OPEN=1; shift 1;;
-      --non-interactive) NON_INTERACTIVE=1; shift 1;;
-      -h|--help) print_help; exit 0;;
-      *) err "Unknown option: $1"; print_help; exit 2;;
-    esac
-  done
+run() {
+    if $DRY_RUN; then
+        echo "[dry-run] $*"
+    else
+        info "Running: $*"
+        "$@"
+    fi
 }
 
 confirm() {
-  if [ "$NON_INTERACTIVE" -eq 1 ]; then
-    return 1
-  fi
-  printf '%s [y/N]: ' "$1"
-  read -r ans
-  case "$ans" in
-    [Yy]* ) return 0;;
-    * ) return 1;;
-  esac
+    local prompt="$1"
+    if $NON_INTERACTIVE; then
+        err "Prompt required but --non-interactive set: $prompt"
+        exit 1
+    fi
+    read -r -p "$prompt [y/N] " _answer
+    [[ "$_answer" =~ ^[Yy]$ ]]
 }
 
-detect_git() {
-  if ! command -v git >/dev/null 2>&1; then
-    err "git not found. Please install git and re-run."
-    exit 3
-  fi
+# ── Help ──────────────────────────────────────────────────────────────────────
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [OPTIONS]
+
+Create a GitHub repository and link it to the current directory.
+
+Authentication:
+  Preferred:  GitHub CLI (gh) — run \`gh auth login\` if not authenticated.
+  Fallback:   export GITHUB_TOKEN=<token>  (requires 'repo' scope)
+              Create token: https://github.com/settings/tokens/new?scopes=repo
+
+Options:
+  --name NAME           Repo name (default: basename of current directory)
+  --description TEXT    Repository description
+  --public              Make repository public (default: private)
+  --private             Make repository private (default)
+  --gitignore TEMPLATE  Gitignore template name (e.g. Python, Node, Go)
+  --license SPDX        License SPDX identifier (e.g. MIT, Apache-2.0)
+  --remote-name NAME    Remote name (default: origin)
+  --branch NAME         Default branch name (default: main)
+  --push                Push initial commit and set upstream (default: do not push)
+  --org ORGNAME         Create repo under an organization
+  --force               Overwrite local remote or replace remote repo if it exists
+  --dry-run             Print actions without executing them
+  --verbose             Extra debug logging
+  --open                Open the created repo in the browser after creation
+  --non-interactive     Fail on prompts instead of asking
+  -h, --help            Show this help
+
+Examples:
+  # Public repo, initial commit, push, Python gitignore, MIT license:
+  ./git-create-repo.sh --name mytool --description 'My tool' --public \\
+      --push --gitignore Python --license MIT
+
+  # Private org repo, non-interactive:
+  GITHUB_TOKEN=xxx ./git-create-repo.sh --name confidential --private \\
+      --org myorg --push --non-interactive --force
+EOF
 }
 
-ensure_git_config() {
-  # set defaults if missing
-  if [ -z "$(git config --global --get user.name || true)" ]; then
-    info "Setting global git user.name to ${DEFAULT_NAME}"
-    run_cmd git config --global user.name "${DEFAULT_NAME}"
-  fi
-  if [ -z "$(git config --global --get user.email || true)" ]; then
-    info "Setting global git user.email to ${DEFAULT_EMAIL}"
-    run_cmd git config --global user.email "${DEFAULT_EMAIL}"
-  fi
+# ── Argument parsing ──────────────────────────────────────────────────────────
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --name)             REPO_NAME="$2";           shift 2 ;;
+            --description)      DESCRIPTION="$2";         shift 2 ;;
+            --public)           VISIBILITY="public";       shift ;;
+            --private)          VISIBILITY="private";      shift ;;
+            --gitignore)        GITIGNORE_TEMPLATE="$2";   shift 2 ;;
+            --license)          LICENSE_SPDX="$2";         shift 2 ;;
+            --remote-name)      REMOTE_NAME="$2";          shift 2 ;;
+            --branch)           BRANCH="$2";               shift 2 ;;
+            --push)             PUSH=true;                 shift ;;
+            --org)              ORG="$2";                  shift 2 ;;
+            --force)            FORCE=true;                shift ;;
+            --dry-run)          DRY_RUN=true;              shift ;;
+            --verbose)          VERBOSE=true;              shift ;;
+            --open)             OPEN_BROWSER=true;         shift ;;
+            --non-interactive)  NON_INTERACTIVE=true;      shift ;;
+            -h|--help)          usage; exit 0 ;;
+            *) err "Unknown option: $1"; usage >&2; exit 1 ;;
+        esac
+    done
 }
 
-in_git_repo() {
-  git rev-parse --is-inside-work-tree >/dev/null 2>&1
+# ── Dependency & auth checks ──────────────────────────────────────────────────
+check_deps() {
+    if ! command -v git &>/dev/null; then
+        err "git is not installed. Install it with your OS package manager (e.g. sudo apt-get install git)."
+        exit 2
+    fi
+    info "git: $(git --version)"
 }
 
-init_local_repo() {
-  if in_git_repo; then
-    info "Directory is already a git repository."
-    return 0
-  fi
-  info "Initializing local git repository and creating initial commit"
-  run_cmd git init
-  # create branch
-  if git help -a | grep -q "switch" 2>/dev/null; then
-    run_cmd git switch -c "$BRANCH"
-  else
-    run_cmd git checkout -b "$BRANCH"
-  fi
-
-  # README
-  if [ -z "$REPO_NAME" ]; then
-    REPO_NAME=$(basename "$(pwd)")
-  fi
-  if [ ! -f README.md ]; then
-    run_cmd printf '# %s\n\n%s\n' "$REPO_NAME" "$DESCRIPTION" > README.md
-  else
-    log "README.md already exists, skipping creation"
-  fi
-
-  # .gitignore and LICENSE via gh if available
-  if [ -n "$GITIGNORE" ]; then
-    if command -v gh >/dev/null 2>&1; then
-      info "Adding .gitignore using gh template: $GITIGNORE"
-      run_cmd gh repo clone -- -q >/dev/null 2>&1 || true
-      # gh has no standalone fetch command; fallback to a simple warning
-      info "No portable fetch for .gitignore without gh repo create; creating empty .gitignore (please update)"
-      run_cmd printf '# %s gitignore\n' "$GITIGNORE" > .gitignore
-    else
-      info "gh CLI not found; creating minimal .gitignore placeholder for $GITIGNORE"
-      run_cmd printf '# %s gitignore\n' "$GITIGNORE" > .gitignore
-    fi
-  fi
-
-  if [ -n "$LICENSE" ]; then
-    if command -v gh >/dev/null 2>&1; then
-      info "Creating LICENSE file using gh for license: $LICENSE"
-      # gh can create a repo with license; here we create a placeholder
-      run_cmd printf '%s license: %s\n' "$REPO_NAME" "$LICENSE" > LICENSE
-    else
-      info "gh CLI not found; creating placeholder LICENSE with SPDX: $LICENSE"
-      run_cmd printf '%s\nSPDX-License-Identifier: %s\n' "$REPO_NAME" "$LICENSE" > LICENSE
-    fi
-  fi
-
-  # initial commit if none exists
-  if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
-    run_cmd git add .
-    run_cmd git commit -m "Initial commit"
-  else
-    log "Repository already has commits; skipping initial commit"
-  fi
-}
-
-gh_available_and_auth() {
-  if command -v gh >/dev/null 2>&1; then
-    if gh auth status >/dev/null 2>&1; then
-      return 0
-    else
-      return 1
-    fi
-  fi
-  return 2
-}
-
-# NOTE: Creating repositories on GitHub requires authentication. To avoid
-# storing a token in this script we removed the REST API fallback. If `gh`
-# is unavailable the script will open the GitHub new-repo page in your
-# browser and ask you to create the repository manually, then paste the
-# repository clone URL when prompted.
-
-ensure_remote_and_push() {
-  local repo_url="$1"
-  # add remote if missing
-  if git remote get-url "$REMOTE_NAME" >/dev/null 2>&1; then
-    existing=$(git remote get-url "$REMOTE_NAME")
-    if [ "$existing" != "$repo_url" ]; then
-      if [ "$FORCE" -eq 1 ]; then
-        info "Remote $REMOTE_NAME exists with different URL; replacing due to --force"
-        run_cmd git remote remove "$REMOTE_NAME"
-        run_cmd git remote add "$REMOTE_NAME" "$repo_url"
-      else
-        info "Remote $REMOTE_NAME already exists (url: $existing). Use --force to replace or remove it manually."
-      fi
-    else
-      log "Remote $REMOTE_NAME already points to target URL"
-    fi
-  else
-    run_cmd git remote add "$REMOTE_NAME" "$repo_url"
-  fi
-
-  if [ "$PUSH" -eq 1 ]; then
-    info "Pushing branch $BRANCH to $REMOTE_NAME"
-    run_cmd git push --set-upstream "$REMOTE_NAME" "$BRANCH"
-  fi
-}
-
-repo_exists_github() {
-  # Returns 0 if repo exists; arguments: owner, name
-  local owner="$1"; local name="$2"
-  if command -v gh >/dev/null 2>&1; then
-    if gh repo view "${owner}/${name}" >/dev/null 2>&1; then
-      return 0
-    else
-      return 1
-    fi
-  fi
-  if [ -z "${GITHUB_TOKEN:-}" ]; then
-    return 2
-  fi
-  status=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/${owner}/${name}" || true)
-  [ "$status" -eq 200 ]
-}
-
-main() {
-  parse_args "$@"
-  detect_git
-  ensure_git_config
-
-  # default repo name
-  if [ -z "$REPO_NAME" ]; then
-    REPO_NAME=$(basename "$(pwd)")
-  fi
-
-  # If not in a repo, initialize local repository
-  if ! in_git_repo; then
-    init_local_repo
-  else
-    info "Using existing git repository in current directory"
-  fi
-
-  # Determine owner for remote creation
-  if [ -n "$ORG" ]; then
-    owner="$ORG"
-  else
-    # try gh to get username, else use API
-    if command -v gh >/dev/null 2>&1; then
-      owner=$(gh api user --jq .login 2>/dev/null) || owner=""
-    else
-      # try API if GITHUB_TOKEN present
-      if [ -n "${GITHUB_TOKEN:-}" ]; then
-        owner=$(curl -s -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/user | sed -n 's/.*"login"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)
-      fi
-    fi
-  fi
-
-  info "Repository name: $REPO_NAME; owner: ${owner:-(unknown)}; private: ${PRIVATE}" 
-
-  # Create repo on GitHub
-  repo_clone_url=""
-  created=0
-  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-    info "Creating repository using gh CLI"
-    gh_args=("repo" "create" "$REPO_NAME")
-    if [ "$PRIVATE" -eq 1 ]; then gh_args+=("--private"); else gh_args+=("--public"); fi
-    [ -n "$DESCRIPTION" ] && gh_args+=("--description" "$DESCRIPTION")
-    [ -n "$ORG" ] && gh_args+=("--org" "$ORG")
-    [ "$PUSH" -eq 1 ] && gh_args+=("--source" "." "--remote" "$REMOTE_NAME" "--push")
-    [ "$DRY_RUN" -eq 1 ] && info "(dry-run) gh ${gh_args[*]}" || run_cmd gh "${gh_args[@]}"
-
-    # attempt to get clone URL
-    if [ "$DRY_RUN" -eq 0 ]; then
-      repo_clone_url=$(gh repo view "${owner:+${owner}/}$REPO_NAME" --json sshUrl,cloneUrl -q '.[0].sshUrl' 2>/dev/null || true)
-      if [ -z "$repo_clone_url" ]; then
-        repo_clone_url=$(gh repo view "${owner:+${owner}/}$REPO_NAME" --json cloneUrl -q '.[0].cloneUrl' 2>/dev/null || true)
-      fi
-      created=1
-    fi
-  else
-    info "gh CLI not available or not authenticated; opening GitHub new-repo page for manual creation"
-    # Build the GitHub new-repo URL with prefilled parameters
-    name_enc=$(printf '%s' "$REPO_NAME" | sed 's/ /+/g')
-    new_url="https://github.com/new?name=${name_enc}"
-    if [ -n "$DESCRIPTION" ]; then
-      desc_enc=$(printf '%s' "$DESCRIPTION" | sed 's/ /+/g')
-      new_url="${new_url}&description=${desc_enc}"
-    fi
-    if [ "$PRIVATE" -eq 1 ]; then
-      new_url="${new_url}&private=true"
-    fi
-    if [ -n "$ORG" ]; then
-      org_enc=$(printf '%s' "$ORG" | sed 's/ /+/g')
-      new_url="${new_url}&owner=${org_enc}"
-    fi
-
-    if [ "$DRY_RUN" -eq 1 ]; then
-      info "(dry-run) Would open: $new_url"
-      repo_clone_url=""
-    else
-      if command -v xdg-open >/dev/null 2>&1; then
-        run_cmd xdg-open "$new_url" || info "Please open in your browser: $new_url"
-      else
-        info "Please open in your browser: $new_url"
-      fi
-
-      info "Create the repository in your browser. After creation, paste the repository clone URL (SSH or HTTPS) below."
-      printf 'Repository clone URL (leave blank to use https://github.com/%s/%s.git): ' "${owner:-<your-username>}" "$REPO_NAME"
-      read -r provided_url
-      if [ -n "$provided_url" ]; then
-        repo_clone_url="$provided_url"
-        created=1
-      else
-        if [ -n "$owner" ]; then
-          repo_clone_url="https://github.com/${owner}/${REPO_NAME}.git"
+detect_auth_method() {
+    if command -v gh &>/dev/null; then
+        info "gh CLI found: $(gh --version | head -1)"
+        if gh auth status &>/dev/null 2>&1; then
+            info "gh is authenticated"
+            AUTH_METHOD="gh"
+            return
         else
-          repo_clone_url="https://github.com/${REPO_NAME}.git"
+            warn "gh is installed but not authenticated. Run: gh auth login"
         fi
-      fi
     fi
-  fi
 
-  if [ -z "$repo_clone_url" ]; then
-    info "Could not determine repo clone URL automatically. Constructing HTTPS URL instead."
-    if [ -n "$owner" ]; then
-      repo_clone_url="https://github.com/${owner}/${REPO_NAME}.git"
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        if ! command -v curl &>/dev/null; then
+            err "curl is required when using GITHUB_TOKEN but is not installed."
+            exit 2
+        fi
+        info "Using GITHUB_TOKEN with curl"
+        AUTH_METHOD="curl"
+        return
+    fi
+
+    if $DRY_RUN; then
+        warn "No authentication found — dry-run will proceed with placeholder values."
+        AUTH_METHOD="none"
+        return
+    fi
+    err "No authentication found. Either:"
+    err "  1. Install gh (https://cli.github.com) and run: gh auth login"
+    err "  2. Set GITHUB_TOKEN with 'repo' scope: https://github.com/settings/tokens/new?scopes=repo"
+    exit 3
+}
+
+# ── Git global config ─────────────────────────────────────────────────────────
+ensure_git_config() {
+    local current_name current_email
+    current_name=$(git config --global user.name 2>/dev/null || true)
+    current_email=$(git config --global user.email 2>/dev/null || true)
+
+    if [[ -z "$current_name" ]]; then
+        log "git user.name not set — defaulting to '$DEFAULT_USER_NAME'"
+        run git config --global user.name "$DEFAULT_USER_NAME"
+    fi
+    if [[ -z "$current_email" ]]; then
+        log "git user.email not set — defaulting to '$DEFAULT_USER_EMAIL'"
+        run git config --global user.email "$DEFAULT_USER_EMAIL"
+    fi
+}
+
+# ── .gitignore ────────────────────────────────────────────────────────────────
+fetch_gitignore() {
+    [[ -z "$GITIGNORE_TEMPLATE" ]] && return
+    local url="https://raw.githubusercontent.com/github/gitignore/main/${GITIGNORE_TEMPLATE}.gitignore"
+    if $DRY_RUN; then
+        echo "[dry-run] Would fetch .gitignore template '$GITIGNORE_TEMPLATE' from $url"
+        return
+    fi
+    if curl -fsSL "$url" -o .gitignore 2>/dev/null; then
+        info "Created .gitignore from template '$GITIGNORE_TEMPLATE'"
     else
-      repo_clone_url="https://github.com/${REPO_NAME}.git"
+        warn "Could not fetch .gitignore template '$GITIGNORE_TEMPLATE' — skipping."
     fi
-  fi
+}
 
-  # Decide SSH vs HTTPS remote: prefer SSH if user has any public key in ~/.ssh
-  remote_url="$repo_clone_url"
-  if [ -d "$HOME/.ssh" ] && ls $HOME/.ssh/*.pub >/dev/null 2>&1; then
-    # try to convert https -> ssh if appropriate
-    if printf '%s' "$repo_clone_url" | grep -q '^https://'; then
-      # extract owner/name
-      ownerpart=$(printf '%s' "$repo_clone_url" | sed -n 's#https://github.com/\([^/]*\)/\([^/]*\)\.git#\1#p')
-      namepart=$(printf '%s' "$repo_clone_url" | sed -n 's#https://github.com/\([^/]*\)/\([^/]*\)\.git#\2#p')
-      if [ -n "$ownerpart" ] && [ -n "$namepart" ]; then
-        remote_url="git@github.com:${ownerpart}/${namepart}.git"
-      fi
+# ── LICENSE ───────────────────────────────────────────────────────────────────
+fetch_license() {
+    [[ -z "$LICENSE_SPDX" ]] && return
+    if $DRY_RUN; then
+        echo "[dry-run] Would create LICENSE for '$LICENSE_SPDX'"
+        return
     fi
-  fi
 
-  info "Using remote URL: $remote_url"
+    local key url body
+    key=$(echo "$LICENSE_SPDX" | tr '[:upper:]' '[:lower:]')
+    url="https://api.github.com/licenses/${key}"
 
-  ensure_remote_and_push "$remote_url"
+    body=$(curl -fsSL -H "Accept: application/vnd.github+json" "$url" 2>/dev/null || true)
+    if [[ -n "$body" ]]; then
+        # Use python3 if available for reliable JSON parsing; fall back to a sed heuristic
+        local text=""
+        if command -v python3 &>/dev/null; then
+            text=$(echo "$body" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('body',''))" 2>/dev/null || true)
+        fi
+        if [[ -n "$text" ]]; then
+            printf '%s\n' "$text" > LICENSE
+            info "Created LICENSE file for '$LICENSE_SPDX'"
+            return
+        fi
+    fi
 
-  if [ "$OPEN" -eq 1 ]; then
-    if command -v xdg-open >/dev/null 2>&1; then
-      run_cmd xdg-open "https://github.com/${owner}/${REPO_NAME}" || info "Open failed; URL: https://github.com/${owner}/${REPO_NAME}"
+    warn "Could not fetch LICENSE for '$LICENSE_SPDX' — creating placeholder."
+    printf '# License: %s\n# Replace this file with the full license text.\n' "$LICENSE_SPDX" > LICENSE
+}
+
+# ── Local repo init ───────────────────────────────────────────────────────────
+init_local_repo() {
+    if git rev-parse --git-dir &>/dev/null 2>&1; then
+        log "Existing git repo detected in $(git rev-parse --show-toplevel)"
+        if $FORCE; then
+            log "--force specified; continuing to link remote."
+        else
+            log "Will use existing repo. Use --force to suppress this message."
+        fi
+        return
+    fi
+
+    log "No git repo found — initializing..."
+    if $DRY_RUN; then
+        echo "[dry-run] git init"
+        echo "[dry-run] git symbolic-ref HEAD refs/heads/$BRANCH"
+        echo "[dry-run] Would create README.md"
+        [[ -n "$GITIGNORE_TEMPLATE" ]] && fetch_gitignore
+        [[ -n "$LICENSE_SPDX" ]]       && fetch_license
+        echo "[dry-run] git add -A && git commit -m 'Initial commit'"
+        return
+    fi
+
+    git init
+    git symbolic-ref HEAD "refs/heads/${BRANCH}"
+
+    if [[ ! -f README.md ]]; then
+        printf '# %s\n' "$REPO_NAME" > README.md
+        [[ -n "$DESCRIPTION" ]] && printf '\n%s\n' "$DESCRIPTION" >> README.md
+        info "Created README.md"
+    fi
+
+    fetch_gitignore
+    fetch_license
+
+    git add -A
+    git commit -m "Initial commit"
+    log "Initial commit created."
+}
+
+# ── GitHub repo creation ──────────────────────────────────────────────────────
+_gh_owner_prefix() {
+    # Returns "ORG/" if --org is set, else ""
+    [[ -n "$ORG" ]] && echo "${ORG}/" || echo ""
+}
+
+create_github_repo_gh() {
+    local repo_slug
+    repo_slug="$(_gh_owner_prefix)${REPO_NAME}"
+
+    local gh_args=("$repo_slug")
+    [[ "$VISIBILITY" == "private" ]] && gh_args+=("--private") || gh_args+=("--public")
+    [[ -n "$DESCRIPTION" ]] && gh_args+=("--description" "$DESCRIPTION")
+
+    if $DRY_RUN; then
+        echo "[dry-run] gh repo create ${gh_args[*]}"
+        return
+    fi
+
+    local output
+    if output=$(gh repo create "${gh_args[@]}" 2>&1); then
+        log "GitHub repository '$repo_slug' created."
+        info "$output"
     else
-      info "Desktop open not available; view repository at: https://github.com/${owner}/${REPO_NAME}"
+        # Check whether it already exists
+        if gh repo view "$repo_slug" &>/dev/null 2>&1; then
+            handle_existing_repo
+        else
+            err "gh repo create failed: $output"
+            exit 1
+        fi
     fi
-  fi
+}
 
-  info "Done. Repository: https://github.com/${owner}/${REPO_NAME}"
+create_github_repo_curl() {
+    local api_url is_private json http_code body full_response
+
+    if [[ -n "$ORG" ]]; then
+        api_url="https://api.github.com/orgs/${ORG}/repos"
+    else
+        api_url="https://api.github.com/user/repos"
+    fi
+
+    [[ "$VISIBILITY" == "private" ]] && is_private="true" || is_private="false"
+    json=$(printf '{"name":"%s","description":"%s","private":%s}' \
+        "$REPO_NAME" "$DESCRIPTION" "$is_private")
+
+    if $DRY_RUN; then
+        echo "[dry-run] POST $api_url"
+        echo "[dry-run] Body: $json"
+        return
+    fi
+
+    full_response=$(curl -sS -w "\n%{http_code}" \
+        -H "Authorization: token $GITHUB_TOKEN" \
+        -H "Accept: application/vnd.github+json" \
+        -H "Content-Type: application/json" \
+        -d "$json" \
+        "$api_url" 2>/dev/null)
+    http_code=$(printf '%s' "$full_response" | tail -1)
+    body=$(printf '%s' "$full_response" | head -n -1)
+
+    case "$http_code" in
+        201)
+            log "GitHub repository '${ORG:+${ORG}/}${REPO_NAME}' created." ;;
+        401|403)
+            err "GitHub API auth failed (HTTP $http_code). Verify GITHUB_TOKEN has 'repo' scope."
+            exit 3 ;;
+        422)
+            handle_existing_repo ;;
+        *)
+            err "GitHub API error (HTTP $http_code): $body"
+            exit 1 ;;
+    esac
+}
+
+handle_existing_repo() {
+    local repo_slug="$(_gh_owner_prefix)${REPO_NAME}"
+    warn "Repository '$repo_slug' already exists on GitHub."
+
+    if ! $FORCE; then
+        err "Use --force to link to the existing repo or delete and recreate it."
+        exit 4
+    fi
+
+    if ! $NON_INTERACTIVE && confirm "Delete and recreate '$repo_slug'? This is DESTRUCTIVE and cannot be undone."; then
+        log "Deleting '$repo_slug'..."
+        if [[ "$AUTH_METHOD" == "gh" ]]; then
+            gh repo delete "$repo_slug" --yes
+            create_github_repo_gh
+        else
+            local owner
+            owner=$(curl -fsSL -H "Authorization: token $GITHUB_TOKEN" \
+                https://api.github.com/user 2>/dev/null \
+                | python3 -c "import sys,json; print(json.load(sys.stdin)['login'])" 2>/dev/null || true)
+            curl -fsSL -X DELETE \
+                -H "Authorization: token $GITHUB_TOKEN" \
+                "https://api.github.com/repos/${ORG:-$owner}/${REPO_NAME}" >/dev/null
+            create_github_repo_curl
+        fi
+    else
+        log "Linking to existing remote '$repo_slug'."
+    fi
+}
+
+create_github_repo() {
+    if [[ "$AUTH_METHOD" == "gh" ]]; then
+        create_github_repo_gh
+    else
+        create_github_repo_curl
+    fi
+}
+
+# ── SSH vs HTTPS detection ────────────────────────────────────────────────────
+detect_remote_protocol() {
+    if ls ~/.ssh/id_*.pub &>/dev/null 2>&1; then
+        info "SSH public key found. Testing GitHub agent..."
+        local ssh_exit=0
+        # Exit 1 = authenticated; 255 = no agent or key not registered with GitHub
+        ssh -T git@github.com -o StrictHostKeyChecking=no -o BatchMode=yes &>/dev/null || ssh_exit=$?
+        if [[ $ssh_exit -eq 1 ]]; then
+            log "SSH: authenticated. Using SSH remote URL."
+            REMOTE_PROTOCOL="ssh"
+        else
+            log "SSH: key found but agent not live or key not added to GitHub (exit $ssh_exit). Using HTTPS."
+            REMOTE_PROTOCOL="https"
+        fi
+    else
+        info "No ~/.ssh/id_*.pub found. Using HTTPS remote URL."
+        REMOTE_PROTOCOL="https"
+    fi
+}
+
+resolve_github_owner() {
+    if [[ -n "$ORG" ]]; then
+        echo "$ORG"
+        return
+    fi
+    if [[ "$AUTH_METHOD" == "gh" ]]; then
+        gh api user --jq .login 2>/dev/null
+    else
+        curl -fsSL \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            https://api.github.com/user 2>/dev/null \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['login'])" 2>/dev/null
+    fi
+}
+
+build_remote_url() {
+    if $DRY_RUN; then
+        REMOTE_URL="<remote-url-would-go-here>"
+        return
+    fi
+
+    detect_remote_protocol
+
+    local owner
+    owner=$(resolve_github_owner)
+    if [[ -z "$owner" ]]; then
+        err "Could not determine GitHub owner for remote URL."
+        exit 1
+    fi
+
+    if [[ "$REMOTE_PROTOCOL" == "ssh" ]]; then
+        REMOTE_URL="git@github.com:${owner}/${REPO_NAME}.git"
+    else
+        REMOTE_URL="https://github.com/${owner}/${REPO_NAME}.git"
+    fi
+    info "Remote URL: $REMOTE_URL"
+}
+
+# ── Remote linking ────────────────────────────────────────────────────────────
+link_remote() {
+    build_remote_url
+
+    if $DRY_RUN; then
+        echo "[dry-run] git remote add $REMOTE_NAME $REMOTE_URL"
+        return
+    fi
+
+    if git remote get-url "$REMOTE_NAME" &>/dev/null 2>&1; then
+        local existing
+        existing=$(git remote get-url "$REMOTE_NAME")
+        if [[ "$existing" == "$REMOTE_URL" ]]; then
+            info "Remote '$REMOTE_NAME' already points to $REMOTE_URL — no change."
+            return
+        fi
+        if $FORCE; then
+            log "Updating remote '$REMOTE_NAME': $existing → $REMOTE_URL"
+            git remote set-url "$REMOTE_NAME" "$REMOTE_URL"
+        else
+            err "Remote '$REMOTE_NAME' already exists ($existing). Use --force to update it."
+            exit 1
+        fi
+    else
+        git remote add "$REMOTE_NAME" "$REMOTE_URL"
+        log "Remote '$REMOTE_NAME' set to $REMOTE_URL"
+    fi
+}
+
+# ── Push ──────────────────────────────────────────────────────────────────────
+push_to_remote() {
+    if ! $PUSH; then
+        info "Skipping push (--push not specified)."
+        return
+    fi
+
+    log "Pushing '$BRANCH' to '$REMOTE_NAME'..."
+    if ! run git push --set-upstream "$REMOTE_NAME" "$BRANCH"; then
+        err "Push failed."
+        exit 5
+    fi
+    log "Push succeeded. Remote: $REMOTE_URL"
+}
+
+# ── Verify & open ─────────────────────────────────────────────────────────────
+verify_repo() {
+    $DRY_RUN && { echo "[dry-run] Would verify repo metadata"; return; }
+    [[ "$AUTH_METHOD" != "gh" ]] && return
+    local repo_slug="$(_gh_owner_prefix)${REPO_NAME}"
+    info "Verifying repo '$repo_slug'..."
+    gh repo view "$repo_slug" 2>/dev/null || true
+}
+
+open_in_browser() {
+    $OPEN_BROWSER || return
+    $DRY_RUN && { echo "[dry-run] Would open repo in browser"; return; }
+
+    local repo_slug="$(_gh_owner_prefix)${REPO_NAME}"
+    log "Opening repo in browser..."
+    if [[ "$AUTH_METHOD" == "gh" ]]; then
+        gh repo view "$repo_slug" --web
+    elif command -v xdg-open &>/dev/null; then
+        xdg-open "https://github.com/${repo_slug}"
+    elif command -v open &>/dev/null; then
+        open "https://github.com/${repo_slug}"
+    else
+        warn "Could not open browser. Visit: https://github.com/${repo_slug}"
+    fi
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+main() {
+    parse_args "$@"
+
+    [[ -z "$REPO_NAME" ]] && REPO_NAME=$(basename "$(pwd)")
+    $DRY_RUN && log "Dry-run mode — no changes will be made."
+
+    check_deps
+    detect_auth_method
+    ensure_git_config
+    init_local_repo
+    create_github_repo
+    link_remote
+    push_to_remote
+    verify_repo
+    open_in_browser
+
+    log "Done. Repository '$REPO_NAME' is ready."
+    [[ -n "$REMOTE_URL" && "$REMOTE_URL" != "<remote-url-would-go-here>" ]] && log "Remote: $REMOTE_URL"
 }
 
 main "$@"
